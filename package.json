@@ -1,6 +1,6 @@
 {
   "name": "browser-smoke",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "MCP browser smoke testing plugin for OpenCode — Playwright-based UI testing via browser automation",
   "keywords": [
     "opencode",
