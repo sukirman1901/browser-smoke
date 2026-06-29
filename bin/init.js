@@ -3,10 +3,18 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = join(__dirname, "..");
 const CWD = process.cwd();
+const HOME = process.env.HOME || process.env.USERPROFILE || "/root";
+const OCODE_GLOBAL_DIR = join(HOME, ".config", "opencode");
+
+function ask(question) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (a) => { rl.close(); resolve(a.trim().toLowerCase()); }));
+}
 
 function sh(cmd, opts = {}) {
   console.log(`> ${cmd}`);
@@ -20,32 +28,50 @@ function getPythonCmd() {
       const ver = execSync(`${cmd} --version`, { stdio: "pipe" }).toString().trim();
       const match = ver.match(/Python (\d+)\.(\d+)/);
       if (match) {
-        const major = parseInt(match[1]), minor = parseInt(match[2]);
+        const [major, minor] = [parseInt(match[1]), parseInt(match[2])];
         if (major > 3 || (major === 3 && minor >= 10)) return cmd;
       }
-    } catch {}
+    } catch { /* skip */ }
   }
   console.error("❌ Python 3.10+ not found. Install Python 3.10 or newer first.");
   process.exit(1);
 }
 
-function detectOcodeConfigPath() {
-  const local = join(CWD, "opencode.json");
-  const globalDir = join(osHomedir(), ".config", "opencode");
-  const globalFile = join(globalDir, "opencode.json");
+function getOrCreateConfig(scope) {
+  const isGlobal = scope === "global";
+  const configDir = isGlobal ? OCODE_GLOBAL_DIR : CWD;
+  const configPath = join(configDir, "opencode.json");
 
-  if (existsSync(local)) return local;
-  if (existsSync(globalFile)) return globalFile;
-  return null;
+  let config = {};
+  if (existsSync(configPath)) {
+    try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch { config = {}; }
+  }
+  return { config, configPath, configDir };
 }
 
-function osHomedir() {
-  return process.env.HOME || process.env.USERPROFILE || "/root";
+function addMcpToConfig(config, venvDir, mcpDir) {
+  if (!config.mcp) config.mcp = {};
+  if (!config.mcp.servers) config.mcp.servers = {};
+  config.mcp.servers["browser-smoke"] = {
+    command: join(venvDir, "bin", "python3"),
+    args: ["-m", "server"],
+    cwd: mcpDir,
+  };
+}
+
+function installSkill(configDir) {
+  const skillsDir = join(configDir, "skills", "browser-smoke");
+  mkdirSync(skillsDir, { recursive: true });
+  const skillSrc = join(PKG_DIR, "skills", "browser-smoke", "SKILL.md");
+  if (existsSync(skillSrc)) {
+    writeFileSync(join(skillsDir, "SKILL.md"), readFileSync(skillSrc, "utf-8"));
+  }
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const isPrint = args.includes("--print");
+  const flagScope = args.includes("--global") ? "global" : args.includes("--local") ? "local" : null;
 
   console.log(`
 ╔══════════════════════════════════════╗
@@ -55,73 +81,73 @@ async function main() {
 `);
 
   const python = getPythonCmd();
-  const installDir = join(CWD, ".browser-smoke");
-  const mcpDir = join(installDir, "mcp");
-  const venvDir = join(installDir, ".venv");
+
+  // --- Ask scope ---
+  let scope = flagScope;
+  if (!scope && !isPrint) {
+    const answer = await ask(`
+Pilih lokasi instalasi:
+
+  [1] Global  — untuk semua project (~/.config/opencode)
+  [2] Local   — hanya project ini (./opencode.json)
+  [3] Cancel
+
+Pilih [1/2/3]: `);
+    if (answer === "3" || answer === "c" || answer === "cancel") {
+      console.log("\n❌ Dibatal.");
+      process.exit(0);
+    }
+    scope = answer === "1" || answer === "g" || answer === "global" ? "global" : "local";
+  } else if (!scope) {
+    scope = "local";
+  }
+
+  const isGlobal = scope === "global";
+  const targetDir = isGlobal ? join(OCODE_GLOBAL_DIR, ".browser-smoke") : join(CWD, ".browser-smoke");
+  const mcpDir = join(targetDir, "mcp");
+  const venvDir = join(targetDir, ".venv");
+
+  console.log(`\n📍 Instalasi: ${isGlobal ? "Global (~/.config/opencode)" : "Local (./)"}`);
 
   if (isPrint) {
-    printConfig(venvDir, mcpDir);
+    const { config } = getOrCreateConfig(scope);
+    addMcpToConfig(config, venvDir, mcpDir);
+    console.log(JSON.stringify(config.mcp.servers["browser-smoke"], null, 2));
     process.exit(0);
   }
 
-  // 1. Copy bundled MCP server to project
+  // --- Install ---
   if (!existsSync(mcpDir)) {
     console.log("\n📦 Copying MCP server files...");
-    mkdirSync(installDir, { recursive: true });
+    mkdirSync(targetDir, { recursive: true });
     cpSync(join(PKG_DIR, "mcp"), mcpDir, { recursive: true });
   } else {
     console.log("\n✅ MCP server already installed. Skipping.");
   }
 
-  // 2. Setup Python venv
   if (!existsSync(join(venvDir, "bin", "python3"))) {
     console.log("\n📦 Creating Python virtual environment...");
     sh(`${python} -m venv "${venvDir}"`);
 
     console.log("\n📦 Installing Python dependencies...");
-    const pip = join(venvDir, "bin", "pip");
-    sh(`"${pip}" install -r "${join(mcpDir, "requirements.txt")}"`);
+    sh(`"${join(venvDir, "bin", "pip")}" install -r "${join(mcpDir, "requirements.txt")}"`);
 
     console.log("\n📦 Installing Playwright browser (Chromium)...");
-    const pw = join(venvDir, "bin", "playwright");
-    sh(`"${pw}" install chromium`);
+    sh(`"${join(venvDir, "bin", "playwright")}" install chromium`);
   } else {
     console.log("\n✅ Virtual environment already exists. Skipping.");
   }
 
-  // 3. Configure opencode.json
+  // --- Config ---
   console.log("\n📝 Configuring OpenCode...");
-  let config = {};
-  const configPath = detectOcodeConfigPath() || join(CWD, "opencode.json");
-
-  if (existsSync(configPath)) {
-    try {
-      config = JSON.parse(readFileSync(configPath, "utf-8"));
-    } catch {
-      config = {};
-    }
-  }
-
-  if (!config.mcp) config.mcp = {};
-  if (!config.mcp.servers) config.mcp.servers = {};
-
-  config.mcp.servers["browser-smoke"] = {
-    command: join(venvDir, "bin", "python3"),
-    args: ["-m", "server"],
-    cwd: mcpDir,
-  };
-
+  const { config, configPath, configDir } = getOrCreateConfig(scope);
+  addMcpToConfig(config, venvDir, mcpDir);
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`   ✅ Config written to: ${configPath}`);
 
-  // 4. Copy skill file
-  const skillsDir = join(dirname(configPath), "skills", "browser-smoke");
-  mkdirSync(skillsDir, { recursive: true });
-  const skillSrc = join(PKG_DIR, "skills", "browser-smoke", "SKILL.md");
-  if (existsSync(skillSrc)) {
-    writeFileSync(join(skillsDir, "SKILL.md"), readFileSync(skillSrc, "utf-8"));
-    console.log("   ✅ Skill file installed");
-  }
+  // --- Skill ---
+  installSkill(configDir);
+  console.log("   ✅ Skill file installed");
 
   console.log(`
 ╔══════════════════════════════════════╗
@@ -133,22 +159,7 @@ async function main() {
 `);
 }
 
-function printConfig(venvDir, mcpDir) {
-  const config = {
-    mcp: {
-      servers: {
-        "browser-smoke": {
-          command: join(venvDir, "bin", "python3"),
-          args: ["-m", "server"],
-          cwd: mcpDir,
-        },
-      },
-    },
-  };
-  console.log(JSON.stringify(config, null, 2));
-}
-
 main().catch((err) => {
-  console.error("❌ Setup failed:", err.message);
+  console.error("\n❌ Setup failed:", err.message);
   process.exit(1);
 });

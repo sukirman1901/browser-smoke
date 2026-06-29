@@ -16,11 +16,21 @@ MCP browser smoke testing plugin for [OpenCode](https://opencode.ai) — Playwri
 npx browser-smoke init
 ```
 
+CLI akan interaktif nanya:
+
+```
+Pilih lokasi instalasi:
+  [1] Global  — untuk semua project (~/.config/opencode)
+  [2] Local   — hanya project ini (./opencode.json)
+  [3] Cancel
+Pilih [1/2/3]:
+```
+
 Proses:
 1. Setup Python virtual environment
 2. Install dependencies (`fastmcp`, `playwright`, `pixelmatch`, `Pillow`)
-3. Install Chromium browser (`playwright install chromium`)
-4. Config `opencode.json` + install skill file
+3. Install Chromium browser
+4. Config `opencode.json` + skill file
 
 Restart OpenCode setelah selesai.
 
@@ -28,8 +38,9 @@ Restart OpenCode setelah selesai.
 
 | Command | Description |
 |---------|-------------|
-| `npx browser-smoke init` | Install lokal (project) |
-| `npx browser-smoke init --global` | Install global |
+| `npx browser-smoke init` | Interaktif (tanya global/local) |
+| `npx browser-smoke init --global` | Global, skip prompt |
+| `npx browser-smoke init --local` | Local, skip prompt |
 | `npx browser-smoke init --print` | Preview config tanpa install |
 
 ### Manual Config
