@@ -51,10 +51,9 @@ function getOrCreateConfig(scope) {
 
 function addMcpToConfig(config, venvDir, mcpDir) {
   if (!config.mcp) config.mcp = {};
-  if (!config.mcp.servers) config.mcp.servers = {};
-  config.mcp.servers["browser-smoke"] = {
-    command: join(venvDir, "bin", "python3"),
-    args: ["-m", "server"],
+  config.mcp["browser-smoke"] = {
+    type: "local",
+    command: [join(venvDir, "bin", "python3"), "-m", "server"],
     cwd: mcpDir,
   };
 }
@@ -112,7 +111,7 @@ Pilih [1/2/3]: `);
   if (isPrint) {
     const { config } = getOrCreateConfig(scope);
     addMcpToConfig(config, venvDir, mcpDir);
-    console.log(JSON.stringify(config.mcp.servers["browser-smoke"], null, 2));
+    console.log(JSON.stringify(config.mcp["browser-smoke"], null, 2));
     process.exit(0);
   }
 

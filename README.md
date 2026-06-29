@@ -50,12 +50,10 @@ Kalo `init` gak bisa dipake, tambahin manual ke `opencode.json`:
 ```json
 {
   "mcp": {
-    "servers": {
-      "browser-smoke": {
-        "command": ".browser-smoke/.venv/bin/python3",
-        "args": ["-m", "server"],
-        "cwd": ".browser-smoke/mcp"
-      }
+    "browser-smoke": {
+      "type": "local",
+      "command": [".browser-smoke/.venv/bin/python3", "-m", "server"],
+      "cwd": ".browser-smoke/mcp"
     }
   }
 }
