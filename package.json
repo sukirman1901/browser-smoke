@@ -1,0 +1,32 @@
+{
+  "name": "browser-smoke",
+  "version": "1.0.0",
+  "description": "MCP browser smoke testing plugin for OpenCode — Playwright-based UI testing via browser automation",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "mcp",
+    "browser",
+    "testing",
+    "smoke-test",
+    "playwright"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sukirman1901/browser-smoke.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "browser-smoke": "bin/init.js"
+  },
+  "files": [
+    "bin/",
+    "mcp/",
+    "skills/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
