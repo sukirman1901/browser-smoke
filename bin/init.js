@@ -14,18 +14,19 @@ function sh(cmd, opts = {}) {
 }
 
 function getPythonCmd() {
-  try {
-    execSync("python3 --version", { stdio: "ignore" });
-    return "python3";
-  } catch {
+  const candidates = ["python3.12", "python3.11", "python3.10", "python3", "python"];
+  for (const cmd of candidates) {
     try {
-      execSync("python --version", { stdio: "ignore" });
-      return "python";
-    } catch {
-      console.error("❌ Python not found. Install Python 3.8+ first.");
-      process.exit(1);
-    }
+      const ver = execSync(`${cmd} --version`, { stdio: "pipe" }).toString().trim();
+      const match = ver.match(/Python (\d+)\.(\d+)/);
+      if (match) {
+        const major = parseInt(match[1]), minor = parseInt(match[2]);
+        if (major > 3 || (major === 3 && minor >= 10)) return cmd;
+      }
+    } catch {}
   }
+  console.error("❌ Python 3.10+ not found. Install Python 3.10 or newer first.");
+  process.exit(1);
 }
 
 function detectOcodeConfigPath() {
