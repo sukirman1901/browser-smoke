@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import fnmatch
 import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -9,7 +8,13 @@ from typing import Any, Optional
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from tools.image_diff import compare_png
-from tools.payload import format_snapshot_lines
+from tools.payload import (
+    cap_append,
+    format_snapshot_lines,
+    matches_url,
+    safe_artifact_name,
+    wrap_init_script,
+)
 
 SNAPSHOT_JS = """
 ({full, start}) => {
@@ -79,6 +84,8 @@ class BrowserSession:
     _dialog_action: str = "dismiss"
     _dialog_prompt: str = ""
     _last_dialog: Optional[dict] = None
+    _listened_pages: set[int] = field(default_factory=set)
+    _block_route_installed: bool = False
 
     async def start(self, headless: bool = False, channel: str = "", user_data_dir: str = ""):
         self._pw = await async_playwright().start()
@@ -103,7 +110,10 @@ class BrowserSession:
             self.context = await self.browser.new_context(**context_kwargs)
             self.page = await self.context.new_page()
         self.context.on("page", self._on_new_page)
+        self.context.on("response", self._on_net_response)
         self._pages = list(self.context.pages)
+        self._listened_pages.clear()
+        self._block_route_installed = False
         for page in self._pages:
             self._setup_page_listeners(page)
 
@@ -113,11 +123,25 @@ class BrowserSession:
         if self.page is None:
             await self.start(headless=headless, channel=channel, user_data_dir=user_data_dir)
 
+    def _need_page(self) -> dict | None:
+        if self.page is None:
+            return {"status": "error", "message": "No page open. Call browser_open first."}
+        return None
+
+    def _need_context(self) -> dict | None:
+        if self.context is None:
+            return {"status": "error", "message": "No browser session. Call browser_open first."}
+        return None
+
     def _setup_page_listeners(self, page: Page):
-        page.on("console", lambda msg: self._console_logs.append({
+        key = id(page)
+        if key in self._listened_pages:
+            return
+        self._listened_pages.add(key)
+        page.on("console", lambda msg: cap_append(self._console_logs, {
             "type": msg.type, "text": msg.text, "url": msg.location.get("url", ""),
         }))
-        page.on("pageerror", lambda err: self._page_errors.append({
+        page.on("pageerror", lambda err: cap_append(self._page_errors, {
             "message": str(err), "url": page.url,
         }))
         page.on("dialog", self._on_dialog)
@@ -127,8 +151,12 @@ class BrowserSession:
             "type": dialog.type,
             "message": str(dialog.message)[:240],
         }
-        if self._dialog_action == "accept":
-            await dialog.accept(self._dialog_prompt)
+        action = self._dialog_action
+        prompt = self._dialog_prompt
+        self._dialog_action = "dismiss"
+        self._dialog_prompt = ""
+        if action == "accept":
+            await dialog.accept(prompt)
         else:
             await dialog.dismiss()
 
@@ -140,17 +168,21 @@ class BrowserSession:
             return mapped
         return selector
 
-    def _locator(self, selector: str):
+    async def _locator(self, selector: str):
+        is_ref = selector.startswith("@") and selector[1:].isdigit()
         target = self._target(selector)
         if isinstance(target, str):
-            return self.page.locator(target).first
-        frame = target.get("frame") or ""
-        loc = (
-            self.page.frame_locator(frame).locator(target["sel"])
-            if frame
-            else self.page.locator(target["sel"])
-        )
-        return loc.first
+            loc = self.page.locator(target).first
+        else:
+            frame = target.get("frame") or ""
+            loc = (
+                self.page.frame_locator(frame).locator(target["sel"])
+                if frame
+                else self.page.locator(target["sel"])
+            ).first
+        if is_ref and await loc.count() == 0:
+            raise ValueError(f"Expired ref {selector}. Call browser_snapshot again.")
+        return loc
 
     def _on_new_page(self, page: Page):
         if page not in self._pages:
@@ -158,59 +190,58 @@ class BrowserSession:
         self._setup_page_listeners(page)
 
     async def start_network_capture(self, patterns: list[str] | None = None):
+        err = self._need_context()
+        if err:
+            return err
         self._network_logs.clear()
         self._network_capturing = True
         self._capture_patterns = patterns or ["**/*"]
-        await self.context.route("**/*", self._handle_capture_route)
         return {"status": "ok", "message": "Network capture started"}
 
-    async def _handle_capture_route(self, route):
-        req = route.request
-        if self._capture_patterns != ["**/*"] and not any(
-            fnmatch.fnmatch(req.url, p) for p in self._capture_patterns
-        ):
-            await route.continue_()
+    def _on_net_response(self, response):
+        if not self._network_capturing:
             return
-        entry = {
-            "method": req.method,
-            "url": req.url,
-            "headers": dict(req.headers),
-            "resource_type": req.resource_type,
-        }
+        url = response.url
+        if not matches_url(url, self._capture_patterns):
+            return
         try:
-            resp = await route.fetch()
-            entry["status"] = resp.status
-            await route.fulfill(response=resp)
-        except Exception as e:
-            entry["status"] = 0
-            entry["error"] = str(e)
-            await route.continue_()
-        self._network_logs.append(entry)
+            cap_append(self._network_logs, {
+                "method": response.request.method,
+                "url": url,
+                "status": response.status,
+                "resource_type": response.request.resource_type,
+            })
+        except Exception:
+            return
+
+    async def _block_route(self, route):
+        if matches_url(route.request.url, self._blocked_patterns):
+            await route.abort()
+            return
+        await route.continue_()
 
     async def stop_network_capture(self):
         self._network_capturing = False
-        await self.context.unroute("**/*")
         return {"status": "ok", "captured": len(self._network_logs)}
 
     def get_network_logs(self):
         return list(self._network_logs)
 
     async def block_resources(self, patterns: list[str]):
-        if not patterns:
-            self._blocked_patterns = []
-            await self.context.unroute("**/*")
-            return {"status": "ok", "message": "All resources unblocked"}
+        err = self._need_context()
+        if err:
+            return err
+        if self._block_route_installed:
+            try:
+                await self.context.unroute("**/*", self._block_route)
+            except Exception:
+                pass
+            self._block_route_installed = False
         self._blocked_patterns = patterns
-
-        async def _block_handler(route):
-            req = route.request
-            for pat in patterns:
-                if fnmatch.fnmatch(req.url, pat):
-                    await route.abort()
-                    return
-            await route.continue_()
-
-        await self.context.route("**/*", _block_handler)
+        if not patterns:
+            return {"status": "ok", "message": "All resources unblocked"}
+        await self.context.route("**/*", self._block_route)
+        self._block_route_installed = True
         return {"status": "ok", "blocked_patterns": patterns}
 
     async def _shot_fields(self, screenshot: bool, screenshot_base64: bool) -> dict:
@@ -256,7 +287,10 @@ class BrowserSession:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    async def extract_dom(self) -> list[dict]:
+    async def extract_dom(self) -> list[dict] | dict:
+        err = self._need_page()
+        if err:
+            return err
         return await self.page.evaluate("""
             () => {
                 const interactives = ['button', 'a', 'input', 'select', 'textarea', '[role="button"]', '[tabindex]'];
@@ -293,6 +327,9 @@ class BrowserSession:
         """)
 
     async def snapshot(self, scope: str = "viewport") -> dict:
+        err = self._need_page()
+        if err:
+            return err
         full = scope == "page"
         self._refs = {}
         items: list[dict] = []
@@ -337,11 +374,16 @@ class BrowserSession:
         screenshot_base64: bool = False,
         timeout: int = 5000,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
+        self._last_dialog = None
         try:
-            await self._locator(selector).click(timeout=timeout)
+            await (await self._locator(selector)).click(timeout=timeout)
             result = {"status": "ok", "url": self.page.url}
             if self._last_dialog:
                 result["dialog"] = self._last_dialog
+                self._last_dialog = None
             result.update(await self._shot_fields(screenshot, screenshot_base64))
             return result
         except Exception as e:
@@ -358,8 +400,11 @@ class BrowserSession:
         screenshot_base64: bool = False,
         timeout: int = 5000,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         try:
-            await self._locator(selector).fill(text, timeout=timeout)
+            await (await self._locator(selector)).fill(text, timeout=timeout)
             result = {"status": "ok"}
             result.update(await self._shot_fields(screenshot, screenshot_base64))
             return result
@@ -367,6 +412,9 @@ class BrowserSession:
             return {"status": "error", "message": str(e)}
 
     async def screenshot(self, *, screenshot_base64: bool = False) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         fields = await self._shot_fields(True, screenshot_base64)
         return {"status": "ok", **fields}
 
@@ -379,8 +427,11 @@ class BrowserSession:
         screenshot: bool = False,
         screenshot_base64: bool = False,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         try:
-            loc = self._locator(selector)
+            loc = await self._locator(selector)
             found = await loc.evaluate(
                 """(el, {color, duration}) => {
                     const orig = {
@@ -410,8 +461,12 @@ class BrowserSession:
         *,
         screenshot_base64: bool = False,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         baseline_dir = os.path.join(os.getcwd(), "artifacts", "baselines")
         os.makedirs(baseline_dir, exist_ok=True)
+        name = safe_artifact_name(name, "baseline")
         baseline_path = os.path.join(baseline_dir, f"{name}.png")
         current_png = await self.page.screenshot(type="png")
 
@@ -463,6 +518,9 @@ class BrowserSession:
         screenshot: bool = False,
         screenshot_base64: bool = False,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         await self.page.evaluate("([dx, dy]) => window.scrollBy(dx, dy)", [x, y])
         result = {"status": "ok"}
         result.update(await self._shot_fields(screenshot, screenshot_base64))
@@ -475,10 +533,13 @@ class BrowserSession:
         url: str = "",
         timeout: int = 10000,
     ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         try:
             if selector:
                 wait_state = state if state in ("visible", "hidden", "attached", "detached") else "visible"
-                await self._locator(selector).wait_for(state=wait_state, timeout=timeout)
+                await (await self._locator(selector)).wait_for(state=wait_state, timeout=timeout)
             elif url:
                 await self.page.wait_for_url(url, timeout=timeout)
             else:
@@ -489,6 +550,9 @@ class BrowserSession:
             return {"status": "error", "message": str(e)}
 
     async def execute(self, js_code: str) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         try:
             result = await self.page.evaluate(js_code)
             return {"status": "ok", "result": result}
@@ -496,10 +560,16 @@ class BrowserSession:
             return {"status": "error", "message": str(e)}
 
     async def inject_script(self, script: str, url_pattern: str = "*"):
-        await self.context.add_init_script(script=script)
-        return {"status": "ok", "message": "Script will run on all new pages"}
+        err = self._need_context()
+        if err:
+            return err
+        await self.context.add_init_script(script=wrap_init_script(script, url_pattern))
+        return {"status": "ok", "message": "Script will run on matching new pages"}
 
     async def offscreen(self, action: str, url: str = "", js: str = "") -> dict:
+        err = self._need_context()
+        if err:
+            return err
         if action == "open":
             self._offscreen_page = await self.context.new_page()
             if url:
@@ -518,6 +588,9 @@ class BrowserSession:
         return {"status": "error", "message": f"unknown action: {action}"}
 
     async def open_tab(self, url: str, *, wait_until: str = "domcontentloaded") -> dict:
+        err = self._need_context()
+        if err:
+            return err
         try:
             page = await self.context.new_page()
             allowed = {"load", "domcontentloaded", "networkidle", "commit"}
@@ -551,6 +624,9 @@ class BrowserSession:
         return list(self._page_errors)
 
     async def get_cookies(self, include_values: bool = False) -> dict:
+        err = self._need_context()
+        if err:
+            return err
         cookies = await self.context.cookies()
         if include_values:
             return {"cookies": cookies, "count": len(cookies)}
@@ -558,6 +634,9 @@ class BrowserSession:
         return {"cookies": slim, "count": len(slim)}
 
     async def set_cookie(self, name: str, value: str, domain: str = "", path: str = "/") -> dict:
+        err = self._need_context()
+        if err:
+            return err
         cookie: dict[str, Any] = {"name": name, "value": value, "path": path}
         if domain:
             cookie["domain"] = domain
@@ -569,10 +648,16 @@ class BrowserSession:
         return {"status": "ok", "cookie": {"name": name, "domain": domain or None, "path": path}}
 
     async def clear_cookies(self) -> dict:
+        err = self._need_context()
+        if err:
+            return err
         await self.context.clear_cookies()
         return {"status": "ok", "message": "All cookies cleared"}
 
     async def storage(self, mode: str, storage: str = "local", key: str = "", value: str = "") -> dict:
+        err = self._need_page()
+        if err:
+            return err
         store = "localStorage" if storage == "local" else "sessionStorage"
         if mode == "all":
             result = await self.page.evaluate(f"JSON.parse(JSON.stringify({store}))")
@@ -596,29 +681,37 @@ class BrowserSession:
         return {"status": "ok", "next_dialog": action}
 
     async def set_files(self, selector: str, paths: str) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         files = [p.strip() for p in paths.split(",") if p.strip()]
         if not files:
             return {"status": "error", "message": "no file paths"}
         missing = [p for p in files if not os.path.exists(p)]
         if missing:
             return {"status": "error", "message": f"missing files: {missing}"}
-        await self._locator(selector).set_input_files(files)
+        await (await self._locator(selector)).set_input_files(files)
         return {"status": "ok", "files": [os.path.basename(p) for p in files]}
 
     async def click_download(self, selector: str, save_as: str = "", timeout: int = 30000) -> dict:
+        err = self._need_page()
+        if err:
+            return err
         dest_dir = os.path.join(os.getcwd(), "artifacts", "downloads")
         os.makedirs(dest_dir, exist_ok=True)
         async with self.page.expect_download(timeout=timeout) as pending:
-            await self._locator(selector).click(timeout=min(timeout, 15000))
+            await (await self._locator(selector)).click(timeout=min(timeout, 15000))
         download = await pending.value
         filename = save_as or download.suggested_filename
-        path = filename if os.path.isabs(filename) else os.path.join(dest_dir, filename)
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        path = os.path.join(dest_dir, safe_artifact_name(filename, "download"))
         await download.save_as(path)
         return {"status": "ok", "path": path, "filename": os.path.basename(path)}
 
     async def select_option(self, selector: str, value: str = "", label: str = "", index: int = -1) -> dict:
-        loc = self._locator(selector)
+        err = self._need_page()
+        if err:
+            return err
+        loc = await self._locator(selector)
         if value:
             await loc.select_option(value=value)
         elif label:
@@ -630,14 +723,23 @@ class BrowserSession:
         return {"status": "ok"}
 
     async def press(self, selector: str, key: str) -> dict:
-        await self._locator(selector).press(key)
+        err = self._need_page()
+        if err:
+            return err
+        await (await self._locator(selector)).press(key)
         return {"status": "ok", "key": key}
 
     async def hover(self, selector: str) -> dict:
-        await self._locator(selector).hover()
+        err = self._need_page()
+        if err:
+            return err
+        await (await self._locator(selector)).hover()
         return {"status": "ok"}
 
     async def reload(self, wait_until: str = "domcontentloaded") -> dict:
+        err = self._need_page()
+        if err:
+            return err
         allowed = {"load", "domcontentloaded", "networkidle", "commit"}
         until = wait_until if wait_until in allowed else "domcontentloaded"
         await self.page.reload(wait_until=until)
@@ -704,6 +806,8 @@ class BrowserSession:
             from tools.dom_extractor import classify_inputs
             from tools.payload import compact_classified
             elements = await self.extract_dom()
+            if isinstance(elements, dict) and elements.get("status") == "error":
+                return elements
             return {"status": "ok", **compact_classified(classify_inputs(elements))}
         return {"status": "error", "message": f"unknown action: {action}"}
 
@@ -744,6 +848,8 @@ class BrowserSession:
         self._dialog_action = "dismiss"
         self._dialog_prompt = ""
         self._last_dialog = None
+        self._listened_pages.clear()
+        self._block_route_installed = False
 
 
 _session = BrowserSession()

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 # ~6k tokens of JSON; larger results must be narrowed by the caller.
 MAX_RESULT_CHARS = 24_000
 LOG_CAP = 40
 LOG_TEXT_CHARS = 240
+LOG_MEM_CAP = 200
 
 
 def dumps(obj: Any) -> str:
@@ -97,3 +101,57 @@ def compact_network(entries: list[dict], *, headers: bool = False) -> list[dict]
             row["headers"] = entry.get("headers")
         out.append(row)
     return out
+
+
+def cap_append(items: list, item: object, *, cap: int = LOG_MEM_CAP) -> None:
+    items.append(item)
+    extra = len(items) - cap
+    if extra > 0:
+        del items[:extra]
+
+
+def url_glob_source(pattern: str) -> str:
+    if pattern in ("*", "**/*", ""):
+        return ".*"
+    body = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    if "://" not in pattern and not pattern.startswith("*"):
+        body = ".*" + body
+    if "://" not in pattern and not pattern.endswith("*"):
+        body = body + ".*"
+    return body
+
+
+def matches_url(url: str, patterns: list[str] | None) -> bool:
+    if not patterns or any(p in ("*", "**/*", "") for p in patterns):
+        return True
+    host = urlparse(url).netloc
+    for p in patterns:
+        try:
+            source = url_glob_source(p)
+            if re.search(source, url) or (host and re.search(source, host)):
+                return True
+        except re.error:
+            pass
+        core = p.replace("*", "")
+        if core and (core in url or core in host):
+            return True
+    return False
+
+
+def wrap_init_script(script: str, url_pattern: str) -> str:
+    if not url_pattern or url_pattern in ("*", "**/*"):
+        return script
+    source = json.dumps(url_glob_source(url_pattern))
+    return (
+        "(() => {\n"
+        f"  const re = new RegExp({source});\n"
+        "  if (!re.test(location.href) && !re.test(location.host)) return;\n"
+        f"{script}\n"
+        "})();"
+    )
+
+
+def safe_artifact_name(name: str, fallback: str = "shot") -> str:
+    base = os.path.basename(name.replace("\\", "/"))
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._")
+    return (cleaned[:80] or fallback)

@@ -1,6 +1,6 @@
 {
   "name": "browser-smoke",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP browser plugin for smoke tests and light scraping — compact Playwright tools",
   "keywords": [
     "opencode",

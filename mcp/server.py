@@ -54,6 +54,8 @@ async def browser_extract_dom() -> str:
     """Compact interactive elements (no bounding boxes). Prefer browser_snapshot when choosing targets."""
     session = await get_session()
     elements = await session.extract_dom()
+    if isinstance(elements, dict) and elements.get("status") == "error":
+        return dumps(elements)
     return dumps(compact_classified(classify_inputs(elements)))
 
 
@@ -136,7 +138,7 @@ async def browser_scroll(
 
 @mcp.tool()
 async def browser_handle_dialog(action: str = "accept", prompt: str = "") -> str:
-    """Set how the next JS dialog is handled. Call this before the click that opens it."""
+    """Set how the *next* JS dialog is handled (one-shot, then back to dismiss). Call before the click that opens it."""
     session = await get_session()
     return dumps(await session.handle_dialog(action, prompt))
 

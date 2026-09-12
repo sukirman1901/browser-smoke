@@ -8,7 +8,7 @@ description: Use when testing UI after feature work, before commit/PR, scraping 
 Do **not** return images unless the user asks for a visual check.
 
 1. `browser_open` then `browser_snapshot` (or `browser_execute` for scrape).
-2. Click/type with `@n` from the last snapshot. Refs tagged `iframe` still use `@n`.
+2. Click/type with `@n` from the last snapshot. After navigation, snapshot again — stale `@n` errors.
 3. Multi-step: one `browser_run`, not a chain of MCP tools.
 4. Screenshot only for visual bugs. Never `screenshot_base64`.
 5. Scrape: `browser_execute` returning a small JSON array. No `innerHTML`.

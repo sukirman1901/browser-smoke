@@ -4,7 +4,7 @@ MCP browser plugin for smoke tests and light page scraping via Playwright. Compa
 
 Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
 
-See [CHANGELOG.md](CHANGELOG.md) for v1.1 token defaults and v1.2 host/file/dialog tools.
+See [CHANGELOG.md](CHANGELOG.md) for v1.2.1 bugfixes, v1.2 host/file/dialog tools, and v1.1 token defaults.
 
 ## Prerequisites
 

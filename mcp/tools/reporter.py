@@ -17,9 +17,10 @@ def generate_report(url: str, results: list[dict]) -> str:
             passed += 1
         else:
             failed += 1
+        step = r.get("step") or r.get("action") or "step"
         detail = r.get("detail", r.get("selector", r.get("url", "")))
-        ss = "📷" if r.get("screenshot") else ""
-        lines.append(f"| {i} | {r['step']}: {detail} | {status} | {ss} |")
+        ss = "📷" if r.get("screenshot") or r.get("screenshot_path") else ""
+        lines.append(f"| {i} | {step}: {detail} | {status} | {ss} |")
     lines.append("")
     lines.append(f"**Summary:** {passed} passed, {failed} failed, {len(results)} total")
     lines.append("")
@@ -27,7 +28,8 @@ def generate_report(url: str, results: list[dict]) -> str:
         lines.append("### Failures")
         for r in results:
             if r.get("status") != "ok":
-                lines.append(f"- **{r['step']}:** {r.get('message', 'Unknown error')}")
+                step = r.get("step") or r.get("action") or "step"
+                lines.append(f"- **{step}:** {r.get('message', 'Unknown error')}")
     return "\n".join(lines)
 
 

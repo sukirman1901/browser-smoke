@@ -12,6 +12,9 @@ from tools.payload import (
     dumps,
     format_snapshot_lines,
     clip_logs,
+    matches_url,
+    safe_artifact_name,
+    wrap_init_script,
 )
 from tools.reporter import generate_report
 
@@ -88,6 +91,29 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("headers", compact[0])
         self.assertEqual(compact[0]["status"], 200)
 
+    def test_matches_json_glob(self):
+        self.assertTrue(matches_url("https://app.test/data.json", ["*.json"]))
+        self.assertFalse(matches_url("https://app.test/page", ["*.json"]))
+
+    def test_matches_substring_host(self):
+        self.assertTrue(matches_url("https://api.foo.com/v1", ["*api*"]))
+
+    def test_safe_artifact_name_strips_path(self):
+        self.assertEqual(safe_artifact_name("../../etc/passwd"), "passwd")
+        self.assertEqual(safe_artifact_name("home page!"), "home_page")
+
+    def test_wrap_init_skips_star(self):
+        self.assertEqual(wrap_init_script("window.x=1", "*"), "window.x=1")
+        wrapped = wrap_init_script("window.x=1", "*.example.com*")
+        self.assertIn("new RegExp", wrapped)
+        self.assertIn("window.x=1", wrapped)
+
+    def test_cap_append_trims_oldest(self):
+        from tools.payload import cap_append
+        items = list(range(5))
+        cap_append(items, 5, cap=5)
+        self.assertEqual(items, [1, 2, 3, 4, 5])
+
 
 class DomExtractorTests(unittest.TestCase):
     def test_guess_email(self):
@@ -110,6 +136,11 @@ class ReporterTests(unittest.TestCase):
             ],
         )
         self.assertIn("1 passed, 1 failed", md)
+
+    def test_report_without_step_key(self):
+        md = generate_report("http://localhost", [{"status": "error", "message": "boom"}])
+        self.assertIn("step:", md)
+        self.assertIn("boom", md)
 
 
 if __name__ == "__main__":
