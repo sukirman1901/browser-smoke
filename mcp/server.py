@@ -8,7 +8,7 @@ import os
 
 from fastmcp import FastMCP
 
-from tools.browser import get_session
+from tools.browser import get_session, registry
 from tools.dom_extractor import classify_inputs, guess_input_value
 from tools.payload import clip_logs, compact_classified, compact_network, dumps
 from tools.reporter import generate_report
@@ -27,18 +27,25 @@ async def browser_open(
     wait_until: str = "domcontentloaded",
     channel: str = "",
     user_data_dir: str = "",
+    persist: bool = False,
+    session: str = "",
 ) -> str:
-    """Open a URL. user_data_dir enables a persistent Playwright profile (cookies survive close)."""
-    session = await get_session()
-    await session.ensure_started(
-        headless=headless, channel=channel, user_data_dir=user_data_dir
+    """Open a URL. persist=true keeps Chromium alive across MCP restarts (CDP). session names isolate tasks."""
+    sess = await get_session(session)
+    await sess.ensure_started(
+        headless=headless,
+        channel=channel,
+        user_data_dir=user_data_dir,
+        persist=persist,
     )
-    result = await session.open(
+    result = await sess.open(
         url,
         wait_until=wait_until,
         screenshot=screenshot,
         screenshot_base64=screenshot_base64,
     )
+    result["session"] = sess.name
+    result["persist"] = sess.persist
     return dumps(result)
 
 
@@ -225,13 +232,20 @@ async def browser_wait(
 
 
 @mcp.tool()
-async def browser_run(actions_json: str, screenshot: bool = False) -> str:
+async def browser_run(actions_json: str, screenshot: bool = False, session: str = "") -> str:
     """Run many actions in one call. JSON array of {action, ...}. Stops on first error."""
-    session = await get_session()
+    sess = await get_session(session)
     actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
     if not isinstance(actions, list):
         return dumps({"status": "error", "message": "actions_json must be a JSON array"})
-    return dumps(await session.run_actions(actions, screenshot=screenshot))
+    return dumps(await sess.run_actions(actions, screenshot=screenshot))
+
+
+@mcp.tool()
+async def browser_script(js_code: str, timeout: int = 60000, session: str = "") -> str:
+    """Run a JS snippet with open/click/type/snapshot/wait/execute (loops allowed). One MCP round."""
+    sess = await get_session(session)
+    return dumps(await sess.run_script(js_code, timeout=timeout))
 
 
 @mcp.tool()
@@ -384,11 +398,70 @@ async def browser_storage(mode: str, storage: str = "local", key: str = "", valu
 
 
 @mcp.tool()
-async def browser_close() -> str:
-    """Close the browser session."""
-    session = await get_session()
-    await session.close()
-    return dumps({"status": "ok"})
+async def browser_session(action: str = "current", name: str = "", shutdown: bool = False) -> str:
+    """Named sessions. action: current|use|list|close. close+shutdown=true kills persisted Chromium."""
+    from tools.persist import cdp_alive, read_state, safe_session_name, state_dir
+
+    if action == "use":
+        sess = await get_session(name)
+        return dumps({"status": "ok", "current": registry.current, "open": sess.page is not None})
+    if action == "list":
+        rows = []
+        seen = set()
+        for n in registry.names():
+            seen.add(n)
+            sess = registry.get(n, switch=False)
+            state = read_state(n)
+            port = int(state.get("port") or 0)
+            rows.append({
+                "name": n,
+                "current": n == registry.current,
+                "open": sess.page is not None,
+                "persist": bool(sess.persist or port),
+                "cdp": cdp_alive(port) if port else False,
+            })
+        if os.path.isdir(state_dir()):
+            for fn in os.listdir(state_dir()):
+                if not fn.endswith(".json"):
+                    continue
+                n = safe_session_name(fn[:-5])
+                if n in seen:
+                    continue
+                state = read_state(n)
+                port = int(state.get("port") or 0)
+                rows.append({
+                    "name": n,
+                    "current": False,
+                    "open": False,
+                    "persist": True,
+                    "cdp": cdp_alive(port) if port else False,
+                })
+        return dumps({"current": registry.current, "sessions": rows})
+    if action == "close":
+        sess = await get_session(name or registry.current)
+        key = sess.name
+        await sess.close(shutdown=shutdown)
+        if shutdown:
+            registry.drop(key)
+        return dumps({"status": "ok", "closed": key, "shutdown": shutdown})
+    sess = await get_session()
+    return dumps({
+        "status": "ok",
+        "current": registry.current,
+        "open": sess.page is not None,
+        "persist": sess.persist,
+    })
+
+
+@mcp.tool()
+async def browser_close(shutdown: bool = True, session: str = "") -> str:
+    """Disconnect the session. shutdown=true (default) kills Chromium. persist sessions: shutdown=false leaves the window."""
+    sess = await get_session(session)
+    key = sess.name
+    await sess.close(shutdown=shutdown)
+    if shutdown:
+        registry.drop(key)
+    return dumps({"status": "ok", "shutdown": shutdown, "session": key})
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ Do **not** return images unless the user asks for a visual check.
 
 1. `browser_open` then `browser_snapshot` (or `browser_execute` for scrape).
 2. Click/type with `@n` from the last snapshot. After navigation, snapshot again — stale `@n` errors.
-3. Multi-step: one `browser_run`, not a chain of MCP tools.
+3. Multi-step: `browser_script` (loops) or one `browser_run`, not a chain of MCP tools.
 4. Screenshot only for visual bugs. Never `screenshot_base64`.
 5. Scrape: `browser_execute` returning a small JSON array. No `innerHTML`.
 
@@ -27,7 +27,16 @@ Smoke extras (optional): `browser_console`, `browser_errors`, `browser_report`, 
 
 Failures block. Debug with console, errors, network_capture `mode=get` (no headers), then `browser_execute`. Screenshot last.
 
-Logged-in session (Playwright profile, not Chrome's daily profile):
+Daily task (window stays up):
+
+```
+browser_open url=... persist=true session=work
+browser_script js_code="await snapshot(); await click('@1'); log(await execute('() => document.title'))"
+```
+
+`browser_close shutdown=false` leaves Chromium running. Next chat: `browser_open persist=true session=work` reconnects.
+
+Logged-in Playwright profile (not Chrome's daily profile):
 
 `browser_open url=... user_data_dir=".browser-smoke/profile"`
 
@@ -35,9 +44,11 @@ Logged-in session (Playwright profile, not Chrome's daily profile):
 
 | Tool | Use |
 |------|-----|
-| `browser_open(url, headless?, user_data_dir?, channel?)` | Navigate. Persistent profile optional. |
+| `browser_open(url, persist?, session?, user_data_dir?)` | `persist=true` keeps Chromium (CDP). `session` isolates tasks. |
+| `browser_session` | `use` / `list` / `close` named sessions. |
+| `browser_script(js_code)` | JS snippet with open/click/type/snapshot/wait/execute. Prefer for loops. |
+| `browser_run(actions_json)` | JSON batch when you do not need loops. |
 | `browser_snapshot(scope?)` | `@ref` list, same-origin iframes tagged `iframe`. |
-| `browser_run(actions_json)` | Batch including click+dialog/popup, drag, paste, wait js, switch_tab. |
 | `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | Selector or `@n`. `click` accepts `dialog` and `popup`. |
 | `browser_select_option` / `browser_set_files` / `browser_download` | Forms and files. |
 | `browser_handle_dialog(action, prompt?)` | Only if the trigger is not a click. Prefer `click(..., dialog=accept)`. |

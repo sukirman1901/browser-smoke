@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
@@ -86,10 +89,59 @@ class BrowserSession:
     _last_dialog: Optional[dict] = None
     _listened_pages: set[int] = field(default_factory=set)
     _block_route_installed: bool = False
+    name: str = "default"
+    persist: bool = False
+    _cdp_port: Optional[int] = None
+    _chrome_pid: Optional[int] = None
 
-    async def start(self, headless: bool = False, channel: str = "", user_data_dir: str = ""):
+    def _bind_io(self):
+        if self.context is None:
+            return
+        self.context.on("page", self._on_new_page)
+        self.context.on("response", self._on_net_response)
+        self._pages = list(self.context.pages)
+        self._listened_pages.clear()
+        self._block_route_installed = False
+        for page in self._pages:
+            self._setup_page_listeners(page)
+
+    async def start(
+        self,
+        headless: bool = False,
+        channel: str = "",
+        user_data_dir: str = "",
+        persist: bool = False,
+    ):
+        from tools.persist import (
+            cdp_alive,
+            read_state,
+            session_cdp_port,
+            spawn_chromium,
+            write_state,
+        )
+
+        self.persist = persist
         self._pw = await async_playwright().start()
         os.makedirs(os.path.join(os.getcwd(), "artifacts", "downloads"), exist_ok=True)
+        if persist:
+            port = session_cdp_port(self.name)
+            profile = os.path.abspath(user_data_dir) if user_data_dir else os.path.abspath(
+                os.path.join(".browser-smoke", "profiles", self.name)
+            )
+            os.makedirs(profile, exist_ok=True)
+            state = read_state(self.name)
+            pid = int(state.get("pid") or 0)
+            if not cdp_alive(port):
+                exe = self._pw.chromium.executable_path
+                pid = spawn_chromium(exe, port, profile, headless=headless)
+            self._cdp_port = port
+            self._chrome_pid = pid
+            write_state(self.name, {"port": port, "pid": pid, "user_data_dir": profile})
+            self.browser = await self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+            self._bind_io()
+            return
         context_kwargs: dict[str, Any] = {
             "viewport": {"width": 1280, "height": 720},
             "accept_downloads": True,
@@ -109,19 +161,22 @@ class BrowserSession:
             self.browser = await self._pw.chromium.launch(**launch_kwargs)
             self.context = await self.browser.new_context(**context_kwargs)
             self.page = await self.context.new_page()
-        self.context.on("page", self._on_new_page)
-        self.context.on("response", self._on_net_response)
-        self._pages = list(self.context.pages)
-        self._listened_pages.clear()
-        self._block_route_installed = False
-        for page in self._pages:
-            self._setup_page_listeners(page)
+        self._bind_io()
 
     async def ensure_started(
-        self, headless: bool = False, channel: str = "", user_data_dir: str = ""
+        self,
+        headless: bool = False,
+        channel: str = "",
+        user_data_dir: str = "",
+        persist: bool = False,
     ):
         if self.page is None:
-            await self.start(headless=headless, channel=channel, user_data_dir=user_data_dir)
+            await self.start(
+                headless=headless,
+                channel=channel,
+                user_data_dir=user_data_dir,
+                persist=persist or self.persist,
+            )
 
     def _need_page(self) -> dict | None:
         if self.page is None:
@@ -270,7 +325,7 @@ class BrowserSession:
         screenshot_base64: bool = False,
     ) -> dict:
         if not self.page:
-            await self.start()
+            await self.ensure_started()
         try:
             allowed = {"load", "domcontentloaded", "networkidle", "commit"}
             until = wait_until if wait_until in allowed else "domcontentloaded"
@@ -909,14 +964,134 @@ class BrowserSession:
             return {"status": "ok", **compact_classified(classify_inputs(elements))}
         return {"status": "error", "message": f"unknown action: {action}"}
 
-    async def close(self):
+    async def _script_rpc(self, method: str, params: dict) -> dict:
+        if method == "open":
+            if self.page is None:
+                await self.ensure_started()
+            return await self.open(params["url"], wait_until=params.get("wait_until", "domcontentloaded"))
+        if method == "click":
+            return await self.click(
+                params["selector"],
+                dialog=params.get("dialog", ""),
+                prompt=params.get("prompt", ""),
+                popup=bool(params.get("popup")),
+            )
+        if method == "type":
+            return await self.type_text(params["selector"], params.get("text", ""))
+        if method == "snapshot":
+            return await self.snapshot(params.get("scope", "viewport"))
+        if method == "wait":
+            return await self.wait(
+                state=params.get("state", "load"),
+                selector=params.get("selector", ""),
+                url=params.get("url", ""),
+                js=params.get("js") or params.get("js_code") or "",
+                timeout=int(params.get("timeout", 10000)),
+            )
+        if method == "execute":
+            return await self.execute(params.get("js_code") or params.get("js") or "")
+        if method == "press":
+            return await self.press(params["selector"], params.get("key", "Enter"))
+        if method == "hover":
+            return await self.hover(params["selector"])
+        if method == "scroll":
+            return await self.scroll(int(params.get("x", 0)), int(params.get("y", 200)))
+        if method == "reload":
+            return await self.reload(params.get("wait_until", "domcontentloaded"))
+        if method == "paste":
+            return await self.paste(params["selector"], params.get("text", ""))
+        if method == "drag":
+            return await self.drag(params.get("source") or params["selector"], params["target"])
+        return {"status": "error", "message": f"unknown helper: {method}"}
+
+    async def run_script(self, js_code: str, timeout: int = 60000) -> dict:
+        if not (js_code or "").strip():
+            return {"status": "error", "message": "js_code is empty"}
+        if self.page is None:
+            await self.ensure_started()
+        host = Path(__file__).resolve().parents[1] / "script-host.mjs"
+        proc = await asyncio.create_subprocess_exec(
+            "node",
+            str(host),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        assert proc.stdin and proc.stdout
+        proc.stdin.write((json.dumps({"type": "script", "code": js_code}) + "\n").encode())
+        await proc.stdin.drain()
+        logs: list[str] = []
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + max(timeout, 1000) / 1000
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    proc.kill()
+                    return {"status": "error", "message": "script timeout", "logs": logs[-20:]}
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not line:
+                    err_out = await proc.stderr.read()
+                    return {
+                        "status": "error",
+                        "message": (err_out.decode()[:500] if err_out else "script host exited"),
+                        "logs": logs[-20:],
+                    }
+                msg = json.loads(line)
+                kind = msg.get("type")
+                if kind == "log":
+                    logs.append(msg.get("text") or "")
+                elif kind == "rpc":
+                    try:
+                        result = await self._script_rpc(msg.get("method") or "", msg.get("params") or {})
+                        proc.stdin.write(
+                            (json.dumps({"type": "ok", "id": msg["id"], "result": result}) + "\n").encode()
+                        )
+                    except Exception as e:
+                        proc.stdin.write(
+                            (json.dumps({"type": "err", "id": msg["id"], "message": str(e)}) + "\n").encode()
+                        )
+                    await proc.stdin.drain()
+                elif kind == "done":
+                    return {"status": "ok", "result": msg.get("result"), "logs": (msg.get("logs") or logs)[-20:]}
+                elif kind == "error":
+                    return {
+                        "status": "error",
+                        "message": msg.get("message") or "script error",
+                        "logs": (msg.get("logs") or logs)[-20:],
+                    }
+        finally:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+
+    async def close(self, shutdown: bool = True):
+        from tools.persist import clear_state, kill_pid
+
+        if self.persist and not shutdown:
+            if self._pw:
+                try:
+                    await self._pw.stop()
+                except Exception:
+                    pass
+            self.browser = None
+            self.context = None
+            self.page = None
+            self._pw = None
+            self._pages.clear()
+            self._refs.clear()
+            self._listened_pages.clear()
+            return
+
         try:
             if self._offscreen_page:
                 await self._offscreen_page.close()
         except Exception:
             pass
         self._offscreen_page = None
-        if self.context:
+        if self.context and not self.persist:
             try:
                 await self.context.close()
             except Exception:
@@ -931,6 +1106,9 @@ class BrowserSession:
                 await self._pw.stop()
             except Exception:
                 pass
+        if self.persist and shutdown:
+            kill_pid(self._chrome_pid or 0)
+            clear_state(self.name)
         self.browser = None
         self.context = None
         self.page = None
@@ -948,10 +1126,15 @@ class BrowserSession:
         self._last_dialog = None
         self._listened_pages.clear()
         self._block_route_installed = False
+        self._cdp_port = None
+        self._chrome_pid = None
+        self.persist = False
 
 
-_session = BrowserSession()
+from tools.registry import SessionRegistry
+
+registry = SessionRegistry(lambda name="default": BrowserSession(name=name))
 
 
-async def get_session() -> BrowserSession:
-    return _session
+async def get_session(name: str = ""):
+    return registry.get(name)

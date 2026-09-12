@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-12
+
+Named sessions, persistent Chromium, and a JS snippet runner. Not Chrome profile migration or Task Spaces.
+
+### Added
+
+- `browser_session` (`current` / `use` / `list` / `close`) — named sessions so two tasks do not share one tab
+- `browser_open(..., persist=true, session=work)` — detached Chromium on CDP; survives MCP restart
+- `browser_close(shutdown=false)` — disconnect without killing a persisted window
+- `browser_script(js_code)` — one round trip with `open` / `click` / `type` / `snapshot` / `wait` / `execute` and real JS loops
+
+### Notes
+
+- Persist uses bundled Chromium + `.browser-smoke/profiles/<session>`, not your daily Chrome profile
+- Re-run `npx browser-smoke init` so `script-host.mjs` is copied
+
 ## [1.2.3] - 2026-09-12
 
 MCP server id is `smoke` so OpenCode tools show as `smoke_browser_open`, not `browser-smoke_browser_open`. Package/repo stay `browser-smoke`. `init` removes the old `browser-smoke` MCP key.

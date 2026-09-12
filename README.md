@@ -4,7 +4,7 @@ MCP Playwright browser for agents: daily tasks (open, click, fill, scrape) and s
 
 Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
 
-See [CHANGELOG.md](CHANGELOG.md) for v1.2.3 (`smoke_browser_open` in OpenCode), v1.2.2 popup/drag/paste, and earlier token defaults.
+See [CHANGELOG.md](CHANGELOG.md) for v1.3 sessions/persist/`browser_script`, v1.2.3 OpenCode `smoke_browser_open`, and earlier token defaults.
 
 ## Prerequisites
 
@@ -21,8 +21,8 @@ Tool results are compact JSON. Clicks, types, and `open` **do not** attach PNG. 
 | Do | Don't |
 |----|--------|
 | `browser_snapshot` then click `@1` | `extract_dom` + screenshot on every click |
-| `browser_run` for a flow | 8 separate MCP calls |
-| `browser_execute` returning JSON | dump `innerHTML` or base64 images |
+| `browser_script` for loops / branches | 8 separate MCP calls |
+| `browser_run` for a short JSON flow | dump `innerHTML` or base64 images |
 
 `npx browser-smoke init` always refreshes the MCP server files so this upgrade lands. OpenCode tool names are `smoke_browser_open` (MCP id `smoke` + tool `browser_open`).
 
@@ -60,9 +60,11 @@ Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 
 | Tool | Description |
 |------|-------------|
-| `browser_open(url, headless?, wait_until?, channel?, user_data_dir?)` | Bundled Chromium. Persistent profile via `user_data_dir` |
-| `browser_run(actions_json)` | Many actions, one call |
-| `browser_open_tab` / `browser_get_tabs` / `browser_switch_tab` / `browser_close` | Tabs |
+| `browser_open(url, persist?, session?, user_data_dir?, channel?)` | `persist=true` = detached Chromium (CDP). `session` isolates tasks |
+| `browser_session` | `current` / `use` / `list` / `close` |
+| `browser_script(js_code)` | JS snippet: open/click/type/snapshot/wait/execute (loops ok) |
+| `browser_run(actions_json)` | JSON batch, one call |
+| `browser_open_tab` / `browser_get_tabs` / `browser_switch_tab` / `browser_close` | Tabs. `close(shutdown=false)` leaves persist window |
 | `browser_scroll(x?, y?)` | `scrollBy` (default down 200px) |
 | `browser_reload` / `browser_hover` / `browser_press` | Reload, menus, keys |
 
@@ -128,6 +130,14 @@ Visual regression:
 
 ```
 browser_screenshot_diff(name="homepage")
+```
+
+Daily agent (window survives MCP restart):
+
+```
+browser_open(url="https://example.com", persist=true, session="work")
+browser_script(js_code="const s = await snapshot(); log(s.snapshot); await click('@1');")
+browser_close(shutdown=false)
 ```
 
 Persistent login (Playwright profile, not your daily Chrome):
