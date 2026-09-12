@@ -1,3 +1,4 @@
+import os
 import socket
 import sys
 import unittest
@@ -9,6 +10,8 @@ from tools.persist import (
     allocate_port,
     kill_pid,
     normalize_cdp_endpoint,
+    persist_preferred_port,
+    persist_profile,
     port_free,
     resolve_launch_mode,
     safe_session_name,
@@ -65,6 +68,20 @@ class PersistHelperTests(unittest.TestCase):
     def test_resolve_cdp_and_channel_error(self):
         with self.assertRaises(ValueError):
             resolve_launch_mode(cdp="9222", channel="chrome")
+
+    def test_persist_profile_default_is_chrome_attach(self):
+        path = persist_profile("default")
+        self.assertTrue(path.endswith(os.path.join(".browser-smoke", "chrome-attach")))
+        self.assertNotIn("profiles", path)
+
+    def test_persist_profile_named_is_isolated(self):
+        path = persist_profile("work")
+        self.assertTrue(path.endswith(os.path.join(".browser-smoke", "chrome-profiles", "work")))
+
+    def test_persist_preferred_port_default_is_9222(self):
+        self.assertEqual(persist_preferred_port("default"), 9222)
+        self.assertEqual(persist_preferred_port(""), 9222)
+        self.assertEqual(persist_preferred_port("work"), 0)
 
 
 class RegistryTests(unittest.TestCase):

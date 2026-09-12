@@ -18,7 +18,7 @@ Never skip snapshot when checking that a submit/publish/login worked. `open refs
 
 ## One living browser (default)
 
-`browser_open url=...` reconnects Smoke Chromium (persist). Same window next chat. Do **not** pass `persist=true`. Do **not** pass `cdp=` unless asked.
+`browser_open url=...` starts or reconnects **Google Chrome** at `~/.browser-smoke/chrome-attach` (port 9222). Same window next chat. Gmail in that profile is reused. Do **not** pass `persist=true` or `cdp=` for the normal path.
 
 ```
 browser_open url=...
@@ -28,7 +28,7 @@ browser_script js_code="await click('@1'); await type('@2', '...');"
 
 `browser_close` leaves the window. `shutdown=true` only to quit.
 
-This is not the user's daily Chrome / Gmail.
+This is not the user's daily Default Chrome. `persist=false` is Playwright Chromium (the testing window).
 
 ## Isolated smoke test
 
@@ -51,7 +51,7 @@ Named sessions: `session=` on **every** tool. `channel=chrome` is throwaway stoc
 
 | Tool | Use |
 |------|-----|
-| `browser_open` | Living Chromium. Then snapshot. `persist=false` = test. `refs=true` = include @n in open (opt-in). |
+| `browser_open` | Living Google Chrome (`chrome-attach`). Then snapshot. `persist=false` = Playwright testing Chromium. |
 | `browser_snapshot` | **How you understand and verify the page.** `@n` for click/type. |
 | `browser_script` | Default for 2+ steps. `snapshot()` / `click('@n')` / `type` / `wait` / `execute` inside. |
 | `browser_run` | JSON batch, no loops. |

@@ -4,7 +4,7 @@ A Playwright browser your coding agent can drive: open a site, fill a form, scra
 
 MCP server id is **`smoke`**. In OpenCode the tools are `smoke_browser_open`, `smoke_browser_snapshot`, … Cursor and Claude Code call the same tools without the prefix (`browser_open`).
 
-Results are compact JSON. Screenshots stay off unless you ask. The agent gets **its own living Chromium** (persist by default) — not the Chrome where you read Gmail. See [What this is not](#what-this-is-not).
+Results are compact JSON. Screenshots stay off unless you ask. The agent gets **its own Google Chrome** at `~/.browser-smoke/chrome-attach` (not the Default profile where you already read Gmail, and not Playwright's testing Chromium). `persist=false` is the testing window. See [What this is not](#what-this-is-not).
 
 Works with [OpenCode](https://opencode.ai), [Cursor](https://cursor.com), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any MCP client.
 
@@ -56,7 +56,7 @@ Same loop for a daily task and a smoke test (OpenCode names):
 
 ## Daily task (window stays up)
 
-This is the default. `smoke_browser_open` starts or reconnects **one** Smoke Chromium. Do not pass `persist=true` (it is already on). Do not launch Chrome debug unless you mean `cdp=`.
+This is the default. `smoke_browser_open` starts or reconnects **Google Chrome** at `~/.browser-smoke/chrome-attach` (port 9222). You do not launch it by hand and you do not pass `cdp=`. Do not pass `persist=true` (it is already on).
 
 ```
 smoke_browser_open url=https://example.com
@@ -64,7 +64,7 @@ smoke_browser_snapshot
 smoke_browser_script js_code="await click('@1'); await type('@2', 'hi');"
 ```
 
-Leave the window. Next chat, `smoke_browser_open` the next URL — same window, cookies kept. `smoke_browser_close` disconnects; it does **not** quit Chromium. Pass `shutdown=true` only when you want the window gone.
+Leave the window. Next chat, `smoke_browser_open` the next URL — same Chrome, cookies kept. `smoke_browser_close` disconnects; it does **not** quit Chrome. Pass `shutdown=true` only when you want the window gone.
 
 Named sessions (`session=work`) if two tasks must not share tabs. Then pass `session=` on **every** tool.
 
@@ -119,9 +119,9 @@ Need stock Chrome instead of bundled Chromium? `channel=chrome` (throwaway, not 
 
 ## Attach to a debug Chrome (`cdp=`)
 
-This drives a Chrome **you** started with remote debugging. It is not the window where you already have Gmail.
+Default `browser_open` already auto-starts `~/.browser-smoke/chrome-attach` on port 9222. Use `cdp=` only for a Chrome you launched yourself on another port.
 
-Chrome 136+ ignores `--remote-debugging-port` on the daily profile. Use a **separate** user-data-dir. Log in inside that window if you need cookies.
+Chrome 136+ ignores `--remote-debugging-port` on the daily Default profile. `chrome-attach` is a separate dir on purpose.
 
 1. Quit daily Chrome if it is using the same binary and you hit a lock (optional on macOS if you only open the debug profile).
 2. Start debug Chrome (macOS):
@@ -162,9 +162,9 @@ Prefer `dialog=accept` on the click that opens the alert. Arm the next dialog on
 
 | You might expect | What you actually get |
 |------------------|------------------------|
-| Agent uses the Chrome window you are looking at | Smoke's own living Chromium. `cdp=` attaches only to a debug Chrome you launched |
-| Gmail / cookies from your daily Chrome | Empty unless the agent logs in inside Smoke (or debug Chrome with `cdp=`) |
-| A second “testing” Chromium on every open | Only if the agent passes `persist=false`. Default open reuses one window |
+| Agent uses the Chrome window you are looking at | A separate Chrome profile: `~/.browser-smoke/chrome-attach`. Not Default. |
+| Gmail / cookies from your daily Default Chrome | Empty. Log in once inside the chrome-attach window (or you already did). |
+| Playwright “Chrome for Testing” on daily open | Only `persist=false` (smoke tests). Default open is Google Chrome. |
 | Window dies when the chat ends | Only if you `close` with `shutdown=true` |
 | Task Spaces / take over from the agent | Named MCP sessions. You do not share tabs with the agent |
 | Screenshot on every click | Path on disk only when `screenshot=true` |
@@ -246,7 +246,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.0**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.1**.
 
 ## License
 

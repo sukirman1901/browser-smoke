@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +24,51 @@ def safe_session_name(name: str) -> str:
 
 def session_cdp_port(name: str) -> int:
     return 9333 + (zlib.crc32(safe_session_name(name).encode()) % 467)
+
+
+def home_root() -> str:
+    return os.path.join(os.path.expanduser("~"), ".browser-smoke")
+
+
+def persist_profile(name: str, override: str = "") -> str:
+    """Default session uses ~/.browser-smoke/chrome-attach (Gmail login lives here)."""
+    if (override or "").strip():
+        return os.path.abspath(os.path.expanduser(override.strip()))
+    n = safe_session_name(name)
+    if n == "default":
+        return os.path.join(home_root(), "chrome-attach")
+    return os.path.join(home_root(), "chrome-profiles", n)
+
+
+def persist_preferred_port(name: str) -> int:
+    if safe_session_name(name) == "default":
+        return 9222
+    return 0
+
+
+def chrome_executable() -> str:
+    """Google Chrome, not Playwright's Chromium. Empty if missing."""
+    candidates: list[str] = []
+    if sys.platform == "darwin":
+        candidates.append("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    elif sys.platform == "win32":
+        candidates.extend(
+            [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]
+        )
+    else:
+        candidates.extend(["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"])
+    for raw in candidates:
+        if os.path.sep in raw or (sys.platform == "win32" and ":" in raw):
+            if os.path.isfile(raw) and os.access(raw, os.X_OK):
+                return raw
+        found = shutil.which(raw)
+        if found:
+            return found
+    return ""
 
 
 def state_dir() -> str:
@@ -156,6 +203,7 @@ def spawn_chromium(
     *,
     headless: bool,
     log_path: str = "",
+    disable_sync: bool = True,
 ) -> int:
     os.makedirs(user_data_dir, exist_ok=True)
     cmd = [
@@ -164,8 +212,9 @@ def spawn_chromium(
         f"--user-data-dir={user_data_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-sync",
     ]
+    if disable_sync:
+        cmd.append("--disable-sync")
     if headless:
         cmd.append("--headless=new")
     cmd.append("about:blank")

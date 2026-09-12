@@ -32,7 +32,7 @@ async def browser_open(
     refs: bool = False,
     session: str = "",
 ) -> str:
-    """Open/reconnect the living Chromium. Then call browser_snapshot for @refs. persist=false is a throwaway test browser. cdp=9222 attaches to debug Chrome (not daily Gmail). refs=true includes a snapshot in this result."""
+    """Open/reconnect the living Google Chrome (~/.browser-smoke/chrome-attach). Then browser_snapshot for @refs. persist=false is Playwright Chromium for tests. cdp=9222 attaches if you already launched debug Chrome."""
     async with locked_session(session) as sess:
         try:
             await sess.ensure_started(

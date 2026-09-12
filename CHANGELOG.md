@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-12
+
+Daily persist is Google Chrome at `~/.browser-smoke/chrome-attach` (port 9222), auto-started. Playwright Chromium is `persist=false` only.
+
+### Changed
+
+- Default `browser_open` launches or reconnects real Chrome (not Chrome for Testing)
+- Default profile is `$HOME/.browser-smoke/chrome-attach` so an existing Gmail login there is reused
+- If port 9222 already has CDP, attach — no second window
+- Fallback to bundled Chromium only when Google Chrome is not installed
+
 ## [1.4.0] - 2026-09-12
 
 Living Chromium is the default. Isolated test Chromium is opt-in.

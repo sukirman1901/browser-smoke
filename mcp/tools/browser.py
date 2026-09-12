@@ -135,8 +135,11 @@ class BrowserSession:
         from tools.persist import (
             allocate_port,
             cdp_alive,
+            chrome_executable,
             kill_pid,
             normalize_cdp_endpoint,
+            persist_preferred_port,
+            persist_profile,
             pid_on_port,
             read_state,
             resolve_launch_mode,
@@ -180,28 +183,37 @@ class BrowserSession:
             self._bind_io()
             return
         if persist:
-            profile = os.path.abspath(user_data_dir) if user_data_dir else os.path.abspath(
-                os.path.join(".browser-smoke", "profiles", self.name)
-            )
+            profile = persist_profile(self.name, user_data_dir)
             os.makedirs(profile, exist_ok=True)
             state = read_state(self.name)
             saved_port = int(state.get("port") or 0)
+            saved_dir = os.path.abspath(str(state.get("user_data_dir") or ""))
             spawned = False
             pid = int(state.get("pid") or 0)
             port = saved_port
+            prefer = persist_preferred_port(self.name)
             try:
-                if saved_port and cdp_alive(saved_port):
+                if prefer and cdp_alive(prefer):
+                    port = prefer
+                    pid = pid_on_port(port) or pid
+                elif saved_port and cdp_alive(saved_port) and (not saved_dir or saved_dir == profile):
                     port = saved_port
                     pid = pid_on_port(port) or pid
                 else:
-                    port = allocate_port(self.name, saved_port)
+                    port = allocate_port(self.name, prefer or saved_port)
                     if cdp_alive(port):
                         pid = pid_on_port(port) or pid
                     else:
-                        exe = self._pw.chromium.executable_path
+                        chrome = chrome_executable()
+                        exe = chrome or self._pw.chromium.executable_path
                         log_path = os.path.join(state_dir(), f"{self.name}.spawn.log")
                         pid = spawn_chromium(
-                            exe, port, profile, headless=headless, log_path=log_path
+                            exe,
+                            port,
+                            profile,
+                            headless=headless,
+                            log_path=log_path,
+                            disable_sync=not bool(chrome),
                         )
                         spawned = True
                 self.browser = await self._pw.chromium.connect_over_cdp(
