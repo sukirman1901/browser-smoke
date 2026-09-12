@@ -67,17 +67,58 @@ def cdp_alive(port: int) -> bool:
 
 def port_free(port: int) -> bool:
     sock = socket.socket()
-    sock.settimeout(0.2)
     try:
-        sock.connect(("127.0.0.1", port))
-        return False
-    except OSError:
+        sock.bind(("127.0.0.1", port))
         return True
+    except OSError:
+        return False
     finally:
         sock.close()
 
 
-def spawn_chromium(executable: str, port: int, user_data_dir: str, *, headless: bool) -> int:
+def pid_on_port(port: int) -> int:
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+        for line in out.split():
+            if line.isdigit():
+                return int(line)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
+    return 0
+
+
+def _usable_cdp_port(port: int) -> bool:
+    # Bind-check first. Connecting for cdp_alive on a non-HTTP listener can
+    # fill the accept backlog and make a follow-up probe look "free".
+    return port_free(port) or cdp_alive(port)
+
+
+def allocate_port(name: str, preferred: int = 0) -> int:
+    if preferred > 0 and _usable_cdp_port(preferred):
+        return preferred
+    base = session_cdp_port(name)
+    for offset in range(16):
+        port = base + offset
+        if port > 65535:
+            break
+        if _usable_cdp_port(port):
+            return port
+    raise RuntimeError("no free CDP port in range")
+
+
+def spawn_chromium(
+    executable: str,
+    port: int,
+    user_data_dir: str,
+    *,
+    headless: bool,
+    log_path: str = "",
+) -> int:
     os.makedirs(user_data_dir, exist_ok=True)
     cmd = [
         executable,
@@ -90,18 +131,33 @@ def spawn_chromium(executable: str, port: int, user_data_dir: str, *, headless: 
     if headless:
         cmd.append("--headless=new")
     cmd.append("about:blank")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    logf = open(log_path, "ab") if log_path else subprocess.DEVNULL
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=logf,
+            start_new_session=True,
+        )
+    finally:
+        if log_path and hasattr(logf, "close"):
+            logf.close()
     deadline = time.time() + 20
     while time.time() < deadline:
         if cdp_alive(port):
             return proc.pid
         if proc.poll() is not None:
-            raise RuntimeError(f"Chromium exited before CDP was ready (code {proc.returncode})")
+            hint = ""
+            if log_path and os.path.exists(log_path):
+                try:
+                    with open(log_path, "rb") as f:
+                        hint = f.read()[-400:].decode("utf-8", "replace")
+                except OSError:
+                    pass
+            raise RuntimeError(
+                f"Chromium exited before CDP was ready (code {proc.returncode})"
+                + (f": {hint.strip()}" if hint.strip() else "")
+            )
         time.sleep(0.15)
     raise RuntimeError(f"CDP did not start on port {port}")
 
@@ -109,7 +165,26 @@ def spawn_chromium(executable: str, port: int, user_data_dir: str, *, headless: 
 def kill_pid(pid: int) -> None:
     if pid <= 0:
         return
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return
+
+    def _alive() -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except (OSError, AttributeError):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                return
+        deadline = time.time() + (2 if sig == signal.SIGTERM else 1)
+        while time.time() < deadline:
+            if not _alive():
+                return
+            time.sleep(0.1)
+        if not _alive():
+            return

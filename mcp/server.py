@@ -8,7 +8,7 @@ import os
 
 from fastmcp import FastMCP
 
-from tools.browser import get_session, registry
+from tools.browser import get_session, locked_session, registry
 from tools.dom_extractor import classify_inputs, guess_input_value
 from tools.payload import clip_logs, compact_classified, compact_network, dumps
 from tools.reporter import generate_report
@@ -30,40 +30,48 @@ async def browser_open(
     persist: bool = False,
     session: str = "",
 ) -> str:
-    """Open a URL. persist=true keeps Chromium alive across MCP restarts (CDP). session names isolate tasks."""
-    sess = await get_session(session)
-    await sess.ensure_started(
-        headless=headless,
-        channel=channel,
-        user_data_dir=user_data_dir,
-        persist=persist,
-    )
-    result = await sess.open(
-        url,
-        wait_until=wait_until,
-        screenshot=screenshot,
-        screenshot_base64=screenshot_base64,
-    )
-    result["session"] = sess.name
-    result["persist"] = sess.persist
-    return dumps(result)
+    """Open a URL. persist=true keeps Chromium alive across MCP restarts (CDP). session names isolate tasks. Pass session= on every later tool too."""
+    if persist and channel:
+        return dumps({
+            "status": "error",
+            "message": "persist=true cannot use channel; omit channel to use bundled Chromium",
+        })
+    async with locked_session(session) as sess:
+        try:
+            await sess.ensure_started(
+                headless=headless,
+                channel=channel,
+                user_data_dir=user_data_dir,
+                persist=persist,
+            )
+        except (ValueError, RuntimeError) as e:
+            return dumps({"status": "error", "message": str(e)})
+        result = await sess.open(
+            url,
+            wait_until=wait_until,
+            screenshot=screenshot,
+            screenshot_base64=screenshot_base64,
+        )
+        result["session"] = sess.name
+        result["persist"] = sess.persist
+        return dumps(result)
 
 
 @mcp.tool()
-async def browser_snapshot(scope: str = "viewport") -> str:
+async def browser_snapshot(scope: str = "viewport", session: str = "") -> str:
     """Compact accessibility snapshot with @refs. Prefer this over extract_dom. Click/type with selector='@1'."""
-    session = await get_session()
-    return dumps(await session.snapshot(scope))
+    async with locked_session(session) as sess:
+        return dumps(await sess.snapshot(scope))
 
 
 @mcp.tool()
-async def browser_extract_dom() -> str:
+async def browser_extract_dom(session: str = "") -> str:
     """Compact interactive elements (no bounding boxes). Prefer browser_snapshot when choosing targets."""
-    session = await get_session()
-    elements = await session.extract_dom()
-    if isinstance(elements, dict) and elements.get("status") == "error":
-        return dumps(elements)
-    return dumps(compact_classified(classify_inputs(elements)))
+    async with locked_session(session) as sess:
+        elements = await sess.extract_dom()
+        if isinstance(elements, dict) and elements.get("status") == "error":
+            return dumps(elements)
+        return dumps(compact_classified(classify_inputs(elements)))
 
 
 @mcp.tool()
@@ -74,18 +82,19 @@ async def browser_click(
     dialog: str = "",
     prompt: str = "",
     popup: bool = False,
+    session: str = "",
 ) -> str:
     """Click CSS or @1. dialog=accept|dismiss handles the JS alert on this click. popup=true waits for window.open and focuses it."""
-    session = await get_session()
-    result = await session.click(
-        selector,
-        screenshot=screenshot,
-        screenshot_base64=screenshot_base64,
-        dialog=dialog,
-        prompt=prompt,
-        popup=popup,
-    )
-    return dumps(result)
+    async with locked_session(session) as sess:
+        result = await sess.click(
+            selector,
+            screenshot=screenshot,
+            screenshot_base64=screenshot_base64,
+            dialog=dialog,
+            prompt=prompt,
+            popup=popup,
+        )
+        return dumps(result)
 
 
 @mcp.tool()
@@ -94,13 +103,14 @@ async def browser_type(
     text: str,
     screenshot: bool = False,
     screenshot_base64: bool = False,
+    session: str = "",
 ) -> str:
     """Type into a CSS selector or snapshot ref like @2."""
-    session = await get_session()
-    result = await session.type_text(
-        selector, text, screenshot=screenshot, screenshot_base64=screenshot_base64
-    )
-    return dumps(result)
+    async with locked_session(session) as sess:
+        result = await sess.type_text(
+            selector, text, screenshot=screenshot, screenshot_base64=screenshot_base64
+        )
+        return dumps(result)
 
 
 @mcp.tool()
@@ -109,21 +119,22 @@ async def browser_type_guess(
     input_type: str = "text",
     screenshot: bool = False,
     screenshot_base64: bool = False,
+    session: str = "",
 ) -> str:
     """Fill a guessed test value (email/password/text/...)."""
-    session = await get_session()
-    value = guess_input_value({"type": input_type})
-    result = await session.type_text(
-        selector, value, screenshot=screenshot, screenshot_base64=screenshot_base64
-    )
-    return dumps(result)
+    async with locked_session(session) as sess:
+        value = guess_input_value({"type": input_type})
+        result = await sess.type_text(
+            selector, value, screenshot=screenshot, screenshot_base64=screenshot_base64
+        )
+        return dumps(result)
 
 
 @mcp.tool()
-async def browser_screenshot(screenshot_base64: bool = False) -> str:
+async def browser_screenshot(screenshot_base64: bool = False, session: str = "") -> str:
     """Capture the viewport. Returns a file path by default, not inline PNG."""
-    session = await get_session()
-    return dumps(await session.screenshot(screenshot_base64=screenshot_base64))
+    async with locked_session(session) as sess:
+        return dumps(await sess.screenshot(screenshot_base64=screenshot_base64))
 
 
 @mcp.tool()
@@ -131,14 +142,15 @@ async def browser_screenshot_diff(
     name: str,
     threshold: float = 0.01,
     screenshot_base64: bool = False,
+    session: str = "",
 ) -> str:
     """Diff against artifacts/baselines/<name>.png. Writes diff PNG to disk; no base64 unless requested."""
-    session = await get_session()
-    return dumps(
-        await session.screenshot_diff(
-            name, threshold, screenshot_base64=screenshot_base64
+    async with locked_session(session) as sess:
+        return dumps(
+            await sess.screenshot_diff(
+                name, threshold, screenshot_base64=screenshot_base64
+            )
         )
-    )
 
 
 @mcp.tool()
@@ -147,75 +159,76 @@ async def browser_scroll(
     y: int = 200,
     screenshot: bool = False,
     screenshot_base64: bool = False,
+    session: str = "",
 ) -> str:
     """Scroll by delta pixels (scrollBy). Default is down 200px."""
-    session = await get_session()
-    return dumps(await session.scroll(x, y, screenshot=screenshot, screenshot_base64=screenshot_base64))
+    async with locked_session(session) as sess:
+        return dumps(await sess.scroll(x, y, screenshot=screenshot, screenshot_base64=screenshot_base64))
 
 
 @mcp.tool()
-async def browser_handle_dialog(action: str = "accept", prompt: str = "") -> str:
+async def browser_handle_dialog(action: str = "accept", prompt: str = "", session: str = "") -> str:
     """Set how the *next* JS dialog is handled (one-shot). Prefer browser_click(..., dialog='accept') when the click opens it."""
-    session = await get_session()
-    return dumps(await session.handle_dialog(action, prompt))
+    async with locked_session(session) as sess:
+        return dumps(await sess.handle_dialog(action, prompt))
 
 
 @mcp.tool()
-async def browser_set_files(selector: str, paths: str) -> str:
+async def browser_set_files(selector: str, paths: str, session: str = "") -> str:
     """Set input[type=file]. paths is a comma-separated list of absolute file paths."""
-    session = await get_session()
-    return dumps(await session.set_files(selector, paths))
+    async with locked_session(session) as sess:
+        return dumps(await sess.set_files(selector, paths))
 
 
 @mcp.tool()
-async def browser_download(selector: str, save_as: str = "", timeout: int = 30000) -> str:
+async def browser_download(selector: str, save_as: str = "", timeout: int = 30000, session: str = "") -> str:
     """Click a download trigger and save the file under artifacts/downloads/."""
-    session = await get_session()
-    return dumps(await session.click_download(selector, save_as, timeout))
+    async with locked_session(session) as sess:
+        return dumps(await sess.click_download(selector, save_as, timeout))
 
 
 @mcp.tool()
 async def browser_select_option(
-    selector: str, value: str = "", label: str = "", index: int = -1
+    selector: str, value: str = "", label: str = "", index: int = -1, session: str = ""
 ) -> str:
     """Choose a <select> option by value, visible label, or index."""
-    session = await get_session()
-    return dumps(await session.select_option(selector, value, label, index))
+    async with locked_session(session) as sess:
+        return dumps(await sess.select_option(selector, value, label, index))
 
 
 @mcp.tool()
-async def browser_drag(source: str, target: str) -> str:
+async def browser_drag(source: str, target: str, session: str = "") -> str:
     """Drag source onto target. CSS or @n."""
-    session = await get_session()
-    return dumps(await session.drag(source, target))
+    async with locked_session(session) as sess:
+        return dumps(await sess.drag(source, target))
 
 
 @mcp.tool()
-async def browser_paste(selector: str, text: str) -> str:
+async def browser_paste(selector: str, text: str, session: str = "") -> str:
     """Insert text in one chunk (contenteditable / paste-like). Use type to replace an input value."""
-    session = await get_session()
-    return dumps(await session.paste(selector, text))
+    async with locked_session(session) as sess:
+        return dumps(await sess.paste(selector, text))
 
 
 @mcp.tool()
-async def browser_press(selector: str, key: str) -> str:
+async def browser_press(selector: str, key: str, session: str = "") -> str:
     """Press a key on an element (Enter, Tab, Control+s, ...)."""
-    session = await get_session()
-    return dumps(await session.press(selector, key))
+    async with locked_session(session) as sess:
+        return dumps(await sess.press(selector, key))
 
 
 @mcp.tool()
-async def browser_hover(selector: str) -> str:
+async def browser_hover(selector: str, session: str = "") -> str:
     """Hover an element (menus, tooltips)."""
-    session = await get_session()
-    return dumps(await session.hover(selector))
+    async with locked_session(session) as sess:
+        return dumps(await sess.hover(selector))
 
 
 @mcp.tool()
-async def browser_reload(wait_until: str = "domcontentloaded") -> str:
+async def browser_reload(wait_until: str = "domcontentloaded", session: str = "") -> str:
     """Reload the current page."""
-    session = await get_session()
-    return dumps(await session.reload(wait_until))
+    async with locked_session(session) as sess:
+        return dumps(await sess.reload(wait_until))
 
 
 @mcp.tool()
@@ -225,27 +238,28 @@ async def browser_wait(
     url: str = "",
     js: str = "",
     timeout: int = 10000,
+    session: str = "",
 ) -> str:
     """Wait for load/domcontentloaded/networkidle, a selector, a URL glob, or JS waitForFunction (js='() => ...')."""
-    session = await get_session()
-    return dumps(await session.wait(state=state, selector=selector, url=url, js=js, timeout=timeout))
+    async with locked_session(session) as sess:
+        return dumps(await sess.wait(state=state, selector=selector, url=url, js=js, timeout=timeout))
 
 
 @mcp.tool()
 async def browser_run(actions_json: str, screenshot: bool = False, session: str = "") -> str:
     """Run many actions in one call. JSON array of {action, ...}. Stops on first error."""
-    sess = await get_session(session)
-    actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
-    if not isinstance(actions, list):
-        return dumps({"status": "error", "message": "actions_json must be a JSON array"})
-    return dumps(await sess.run_actions(actions, screenshot=screenshot))
+    async with locked_session(session) as sess:
+        actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
+        if not isinstance(actions, list):
+            return dumps({"status": "error", "message": "actions_json must be a JSON array"})
+        return dumps(await sess.run_actions(actions, screenshot=screenshot))
 
 
 @mcp.tool()
 async def browser_script(js_code: str, timeout: int = 60000, session: str = "") -> str:
     """Run a JS snippet with open/click/type/snapshot/wait/execute (loops allowed). One MCP round."""
-    sess = await get_session(session)
-    return dumps(await sess.run_script(js_code, timeout=timeout))
+    async with locked_session(session) as sess:
+        return dumps(await sess.run_script(js_code, timeout=timeout))
 
 
 @mcp.tool()
@@ -255,22 +269,23 @@ async def browser_highlight(
     duration: int = 2000,
     screenshot: bool = False,
     screenshot_base64: bool = False,
+    session: str = "",
 ) -> str:
     """Outline an element. Screenshot only if requested."""
-    session = await get_session()
-    return dumps(
-        await session.highlight(
-            selector, color, duration, screenshot=screenshot, screenshot_base64=screenshot_base64
+    async with locked_session(session) as sess:
+        return dumps(
+            await sess.highlight(
+                selector, color, duration, screenshot=screenshot, screenshot_base64=screenshot_base64
+            )
         )
-    )
 
 
 @mcp.tool()
-async def browser_report(results_json: str, include_report: bool = False) -> str:
+async def browser_report(results_json: str, include_report: bool = False, session: str = "") -> str:
     """Write artifacts/smoke-report.md. Returns the path; set include_report=true to echo markdown."""
     results = json.loads(results_json) if isinstance(results_json, str) else results_json
-    session = await get_session()
-    url = session.page.url if session.page else "unknown"
+    async with locked_session(session) as sess:
+        url = sess.page.url if sess.page else "unknown"
     report = generate_report(url, results)
     os.makedirs(os.path.dirname(REPORT_FILE) or ".", exist_ok=True)
     with open(REPORT_FILE, "w") as f:
@@ -282,119 +297,128 @@ async def browser_report(results_json: str, include_report: bool = False) -> str
 
 
 @mcp.tool()
-async def browser_execute(js_code: str) -> str:
+async def browser_execute(js_code: str, session: str = "") -> str:
     """Run JavaScript in the page and return a JSON result. Prefer this for scraping."""
-    session = await get_session()
-    if session.page is None:
-        return dumps({"status": "error", "message": "No page open. Call browser_open first."})
-    return dumps(await session.execute(js_code))
+    async with locked_session(session) as sess:
+        if sess.page is None:
+            return dumps({"status": "error", "message": "No page open. Call browser_open first."})
+        return dumps(await sess.execute(js_code))
 
 
 @mcp.tool()
-async def browser_offscreen(action: str, url: str = "", js: str = "") -> str:
+async def browser_offscreen(action: str, url: str = "", js: str = "", session: str = "") -> str:
     """Hidden page for background work. action: open|exec|close."""
-    session = await get_session()
-    return dumps(await session.offscreen(action, url, js))
+    async with locked_session(session) as sess:
+        return dumps(await sess.offscreen(action, url, js))
 
 
 @mcp.tool()
-async def browser_open_tab(url: str) -> str:
+async def browser_open_tab(url: str, session: str = "") -> str:
     """Open a new tab and focus it."""
-    session = await get_session()
-    if session.context is None:
-        await session.start()
-    return dumps(await session.open_tab(url))
+    async with locked_session(session) as sess:
+        if sess.context is None:
+            try:
+                await sess.ensure_started()
+            except (ValueError, RuntimeError) as e:
+                return dumps({"status": "error", "message": str(e)})
+        return dumps(await sess.open_tab(url))
 
 
 @mcp.tool()
-async def browser_get_tabs() -> str:
+async def browser_get_tabs(session: str = "") -> str:
     """List open tabs (title, URL, active)."""
-    session = await get_session()
-    tabs = await session.get_tabs()
-    return dumps({"tabs": tabs, "active_tab": next((t for t in tabs if t["active"]), None)})
+    async with locked_session(session) as sess:
+        tabs = await sess.get_tabs()
+        return dumps({"tabs": tabs, "active_tab": next((t for t in tabs if t["active"]), None)})
 
 
 @mcp.tool()
-async def browser_switch_tab(index: int) -> str:
+async def browser_switch_tab(index: int, session: str = "") -> str:
     """Focus an open tab by index from browser_get_tabs."""
-    session = await get_session()
-    return dumps(await session.switch_tab(index))
+    async with locked_session(session) as sess:
+        return dumps(await sess.switch_tab(index))
 
 
 @mcp.tool()
-async def browser_console() -> str:
+async def browser_console(session: str = "") -> str:
     """Recent console logs (capped, text truncated)."""
-    session = await get_session()
-    logs = clip_logs(session.get_console())
-    return dumps({"entries": logs, "count": len(logs)})
+    async with locked_session(session) as sess:
+        logs = clip_logs(sess.get_console())
+        return dumps({"entries": logs, "count": len(logs)})
 
 
 @mcp.tool()
-async def browser_errors() -> str:
+async def browser_errors(session: str = "") -> str:
     """Recent pageerror events (capped)."""
-    session = await get_session()
-    errors = clip_logs(
-        [{"text": e.get("message", ""), "url": e.get("url", "")} for e in session.get_errors()]
-    )
-    return dumps({"entries": errors, "count": len(errors)})
+    async with locked_session(session) as sess:
+        errors = clip_logs(
+            [{"text": e.get("message", ""), "url": e.get("url", "")} for e in sess.get_errors()]
+        )
+        return dumps({"entries": errors, "count": len(errors)})
 
 
 @mcp.tool()
-async def browser_network_capture(mode: str, patterns: str = "", headers: bool = False) -> str:
+async def browser_network_capture(
+    mode: str, patterns: str = "", headers: bool = False, session: str = ""
+) -> str:
     """Capture requests. mode: start|stop|get. get omits headers unless headers=true."""
-    session = await get_session()
-    if mode == "start":
-        pattern_list = [p.strip() for p in patterns.split(",") if p.strip()] if patterns else None
-        return dumps(await session.start_network_capture(pattern_list))
-    if mode == "stop":
-        return dumps(await session.stop_network_capture())
-    if mode == "get":
-        entries = compact_network(session.get_network_logs(), headers=headers)
-        return dumps({"entries": entries, "count": len(entries)})
-    return dumps({"status": "error", "message": f"unknown mode: {mode}"})
+    async with locked_session(session) as sess:
+        if mode == "start":
+            pattern_list = [p.strip() for p in patterns.split(",") if p.strip()] if patterns else None
+            return dumps(await sess.start_network_capture(pattern_list))
+        if mode == "stop":
+            return dumps(await sess.stop_network_capture())
+        if mode == "get":
+            entries = compact_network(sess.get_network_logs(), headers=headers)
+            return dumps({"entries": entries, "count": len(entries)})
+        return dumps({"status": "error", "message": f"unknown mode: {mode}"})
 
 
 @mcp.tool()
-async def browser_block_resources(patterns: str) -> str:
+async def browser_block_resources(patterns: str, session: str = "") -> str:
     """Block resources by comma-separated globs. Empty string unblocks."""
-    session = await get_session()
-    pattern_list = [p.strip() for p in patterns.split(",") if p.strip()]
-    return dumps(await session.block_resources(pattern_list))
+    async with locked_session(session) as sess:
+        pattern_list = [p.strip() for p in patterns.split(",") if p.strip()]
+        return dumps(await sess.block_resources(pattern_list))
 
 
 @mcp.tool()
-async def browser_inject_script(script: str, url_pattern: str = "*") -> str:
+async def browser_inject_script(script: str, url_pattern: str = "*", session: str = "") -> str:
     """addInitScript before future navigations."""
-    session = await get_session()
-    return dumps(await session.inject_script(script, url_pattern))
+    async with locked_session(session) as sess:
+        return dumps(await sess.inject_script(script, url_pattern))
 
 
 @mcp.tool()
-async def browser_get_cookies(include_values: bool = False) -> str:
+async def browser_get_cookies(include_values: bool = False, session: str = "") -> str:
     """Cookie names/domains only unless include_values=true."""
-    session = await get_session()
-    return dumps(await session.get_cookies(include_values=include_values))
+    async with locked_session(session) as sess:
+        return dumps(await sess.get_cookies(include_values=include_values))
 
 
 @mcp.tool()
-async def browser_set_cookie(name: str, value: str, domain: str = "", path: str = "/") -> str:
+async def browser_set_cookie(
+    name: str, value: str, domain: str = "", path: str = "/", session: str = ""
+) -> str:
     """Set a cookie. Domain optional if a page is already open."""
-    session = await get_session()
-    return dumps(await session.set_cookie(name, value, domain, path))
+    async with locked_session(session) as sess:
+        return dumps(await sess.set_cookie(name, value, domain, path))
 
 
 @mcp.tool()
-async def browser_clear_cookies() -> str:
+async def browser_clear_cookies(session: str = "") -> str:
     """Clear all cookies in the current context."""
-    session = await get_session()
-    return dumps(await session.clear_cookies())
+    async with locked_session(session) as sess:
+        return dumps(await sess.clear_cookies())
 
 
 @mcp.tool()
-async def browser_storage(mode: str, storage: str = "local", key: str = "", value: str = "") -> str:
+async def browser_storage(
+    mode: str, storage: str = "local", key: str = "", value: str = "", session: str = ""
+) -> str:
     """localStorage/sessionStorage. mode: all|get|set|clear. storage: local|session."""
-    session = await get_session()
-    return dumps(await session.storage(mode, storage, key, value))
+    async with locked_session(session) as sess:
+        return dumps(await sess.storage(mode, storage, key, value))
 
 
 @mcp.tool()
@@ -438,9 +462,9 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
                 })
         return dumps({"current": registry.current, "sessions": rows})
     if action == "close":
-        sess = await get_session(name or registry.current)
-        key = sess.name
-        await sess.close(shutdown=shutdown)
+        async with locked_session(name or registry.current) as sess:
+            key = sess.name
+            await sess.close(shutdown=shutdown)
         if shutdown:
             registry.drop(key)
         return dumps({"status": "ok", "closed": key, "shutdown": shutdown})
@@ -456,9 +480,9 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
 @mcp.tool()
 async def browser_close(shutdown: bool = True, session: str = "") -> str:
     """Disconnect the session. shutdown=true (default) kills Chromium. persist sessions: shutdown=false leaves the window."""
-    sess = await get_session(session)
-    key = sess.name
-    await sess.close(shutdown=shutdown)
+    async with locked_session(session) as sess:
+        key = sess.name
+        await sess.close(shutdown=shutdown)
     if shutdown:
         registry.drop(key)
     return dumps({"status": "ok", "shutdown": shutdown, "session": key})

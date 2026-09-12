@@ -25,9 +25,6 @@ class SessionRegistry:
             self._sessions[key] = self._factory(name=key)
         return self._sessions[key]
 
-    def use(self, name: str):
-        return self.get(name)
-
     def drop(self, name: str) -> None:
         from tools.persist import safe_session_name
 

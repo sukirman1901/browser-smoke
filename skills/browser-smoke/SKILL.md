@@ -36,6 +36,8 @@ browser_script js_code="await snapshot(); await click('@1'); log(await execute('
 
 `browser_close shutdown=false` leaves Chromium running. Next chat: `browser_open persist=true session=work` reconnects.
 
+Two named sessions: pass `session=` on **every** tool (`snapshot`, `click`, `script`, `close`), not only `open`. `persist=true` cannot be combined with `channel`.
+
 Logged-in Playwright profile (not Chrome's daily profile):
 
 `browser_open url=... user_data_dir=".browser-smoke/profile"`

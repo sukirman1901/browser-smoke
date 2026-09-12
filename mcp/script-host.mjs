@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
  * Runs agent JS against the Python MCP session over stdin/stdout JSON lines.
- * Helpers: open, click, type, snapshot, wait, execute, press, hover, scroll, log, page.
  */
 import readline from "node:readline";
 
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+function asOpts(opts) {
+  if (opts == null) return {};
+  if (typeof opts === "object" && !Array.isArray(opts)) return opts;
+  return {};
 }
 
 let rpcId = 0;
@@ -30,13 +35,31 @@ function log(...args) {
   send({ type: "log", text });
 }
 
+const STATES = new Set([
+  "load",
+  "domcontentloaded",
+  "networkidle",
+  "commit",
+  "visible",
+  "hidden",
+  "attached",
+  "detached",
+]);
+
 const page = {
-  goto: (url, opts = {}) => rpc("open", { url, ...opts }),
-  click: (selector, opts = {}) => rpc("click", { selector, ...opts }),
+  goto: (url, opts) => rpc("open", { url, ...asOpts(opts) }),
+  click: (selector, opts) => rpc("click", { selector, ...asOpts(opts) }),
   fill: (selector, text) => rpc("type", { selector, text }),
   type: (selector, text) => rpc("type", { selector, text }),
   snapshot: (scope = "viewport") => rpc("snapshot", { scope }),
-  wait: (opts = {}) => rpc("wait", opts),
+  wait: (opts) => {
+    if (typeof opts === "string") {
+      if (STATES.has(opts)) return rpc("wait", { state: opts });
+      if (opts.includes("*") || opts.includes("://")) return rpc("wait", { url: opts });
+      return rpc("wait", { selector: opts });
+    }
+    return rpc("wait", asOpts(opts));
+  },
   evaluate: (js) =>
     rpc("execute", { js_code: typeof js === "function" ? `(${js})()` : String(js) }),
   press: (selector, key) => rpc("press", { selector, key }),
@@ -45,6 +68,19 @@ const page = {
   reload: () => rpc("reload", {}),
   paste: (selector, text) => rpc("paste", { selector, text }),
   drag: (source, target) => rpc("drag", { source, target }),
+  dialog: (action, prompt = "") => rpc("dialog", { handle: action, prompt }),
+  download: (selector, saveAs = "") => rpc("download", { selector, save_as: saveAs }),
+  upload: (selector, paths) =>
+    rpc("set_files", {
+      selector,
+      paths: Array.isArray(paths) ? paths.join(",") : String(paths ?? ""),
+    }),
+  select: (selector, opts) => {
+    if (typeof opts === "string") return rpc("select", { selector, value: opts });
+    if (typeof opts === "number") return rpc("select", { selector, index: opts });
+    return rpc("select", { selector, ...asOpts(opts) });
+  },
+  switchTab: (index) => rpc("switch_tab", { index }),
 };
 
 const open = (url, opts) => page.goto(url, opts);
@@ -56,6 +92,11 @@ const execute = (js) => page.evaluate(js);
 const press = (selector, key) => page.press(selector, key);
 const hover = (selector) => page.hover(selector);
 const scroll = (x, y) => page.scroll(x, y);
+const dialog = (action, prompt) => page.dialog(action, prompt);
+const download = (selector, saveAs) => page.download(selector, saveAs);
+const upload = (selector, paths) => page.upload(selector, paths);
+const select = (selector, opts) => page.select(selector, opts);
+const switchTab = (index) => page.switchTab(index);
 
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -91,6 +132,11 @@ rl.on("line", async (line) => {
       "hover",
       "scroll",
       "log",
+      "dialog",
+      "download",
+      "upload",
+      "select",
+      "switchTab",
       msg.code,
     );
     const result = await fn(
@@ -105,6 +151,11 @@ rl.on("line", async (line) => {
       hover,
       scroll,
       log,
+      dialog,
+      download,
+      upload,
+      select,
+      switchTab,
     );
     send({ type: "done", result, logs });
   } catch (err) {

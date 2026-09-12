@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -93,6 +94,7 @@ class BrowserSession:
     persist: bool = False
     _cdp_port: Optional[int] = None
     _chrome_pid: Optional[int] = None
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def _bind_io(self):
         if self.context is None:
@@ -113,35 +115,80 @@ class BrowserSession:
         persist: bool = False,
     ):
         from tools.persist import (
+            allocate_port,
             cdp_alive,
+            kill_pid,
+            pid_on_port,
             read_state,
-            session_cdp_port,
             spawn_chromium,
+            state_dir,
             write_state,
         )
+
+        if persist and channel:
+            raise ValueError("persist=true cannot use channel; omit channel to use bundled Chromium")
 
         self.persist = persist
         self._pw = await async_playwright().start()
         os.makedirs(os.path.join(os.getcwd(), "artifacts", "downloads"), exist_ok=True)
         if persist:
-            port = session_cdp_port(self.name)
             profile = os.path.abspath(user_data_dir) if user_data_dir else os.path.abspath(
                 os.path.join(".browser-smoke", "profiles", self.name)
             )
             os.makedirs(profile, exist_ok=True)
             state = read_state(self.name)
+            saved_port = int(state.get("port") or 0)
+            spawned = False
             pid = int(state.get("pid") or 0)
-            if not cdp_alive(port):
-                exe = self._pw.chromium.executable_path
-                pid = spawn_chromium(exe, port, profile, headless=headless)
-            self._cdp_port = port
-            self._chrome_pid = pid
-            write_state(self.name, {"port": port, "pid": pid, "user_data_dir": profile})
-            self.browser = await self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-            self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
-            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-            self._bind_io()
-            return
+            port = saved_port
+            try:
+                if saved_port and cdp_alive(saved_port):
+                    port = saved_port
+                    pid = pid_on_port(port) or pid
+                else:
+                    port = allocate_port(self.name, saved_port)
+                    if cdp_alive(port):
+                        pid = pid_on_port(port) or pid
+                    else:
+                        exe = self._pw.chromium.executable_path
+                        log_path = os.path.join(state_dir(), f"{self.name}.spawn.log")
+                        pid = spawn_chromium(
+                            exe, port, profile, headless=headless, log_path=log_path
+                        )
+                        spawned = True
+                self.browser = await self._pw.chromium.connect_over_cdp(
+                    f"http://127.0.0.1:{port}"
+                )
+                if self.browser.contexts:
+                    self.context = self.browser.contexts[0]
+                else:
+                    self.context = await self.browser.new_context(
+                        viewport={"width": 1280, "height": 720},
+                        accept_downloads=True,
+                    )
+                self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+                try:
+                    await self.page.set_viewport_size({"width": 1280, "height": 720})
+                except Exception:
+                    pass
+                self._cdp_port = port
+                self._chrome_pid = pid
+                self._bind_io()
+                write_state(
+                    self.name,
+                    {"port": port, "pid": pid, "user_data_dir": profile},
+                )
+                return
+            except Exception:
+                if spawned:
+                    kill_pid(pid)
+                if self._pw:
+                    try:
+                        await self._pw.stop()
+                    except Exception:
+                        pass
+                    self._pw = None
+                raise
         context_kwargs: dict[str, Any] = {
             "viewport": {"width": 1280, "height": 720},
             "accept_downloads": True,
@@ -964,7 +1011,10 @@ class BrowserSession:
             return {"status": "ok", **compact_classified(classify_inputs(elements))}
         return {"status": "error", "message": f"unknown action: {action}"}
 
-    async def _script_rpc(self, method: str, params: dict) -> dict:
+    async def _script_rpc(self, method: str, params: object) -> dict:
+        from tools.script_rpc import coerce_rpc_params
+
+        params = coerce_rpc_params(method, params)
         if method == "open":
             if self.page is None:
                 await self.ensure_started()
@@ -1002,6 +1052,21 @@ class BrowserSession:
             return await self.paste(params["selector"], params.get("text", ""))
         if method == "drag":
             return await self.drag(params.get("source") or params["selector"], params["target"])
+        if method == "dialog":
+            return await self.handle_dialog(params.get("handle") or params.get("action") or "accept", params.get("prompt", ""))
+        if method == "download":
+            return await self.click_download(params["selector"], params.get("save_as", ""))
+        if method in ("set_files", "upload"):
+            return await self.set_files(params["selector"], params.get("paths") or params.get("files") or "")
+        if method == "select":
+            return await self.select_option(
+                params["selector"],
+                value=params.get("value", ""),
+                label=params.get("label", ""),
+                index=int(params.get("index", -1)),
+            )
+        if method == "switch_tab":
+            return await self.switch_tab(int(params["index"]))
         return {"status": "error", "message": f"unknown helper: {method}"}
 
     async def run_script(self, js_code: str, timeout: int = 60000) -> dict:
@@ -1021,8 +1086,9 @@ class BrowserSession:
         proc.stdin.write((json.dumps({"type": "script", "code": js_code}) + "\n").encode())
         await proc.stdin.drain()
         logs: list[str] = []
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + max(timeout, 1000) / 1000
+        finished = False
         try:
             while True:
                 remaining = deadline - loop.time()
@@ -1043,9 +1109,15 @@ class BrowserSession:
                     logs.append(msg.get("text") or "")
                 elif kind == "rpc":
                     try:
-                        result = await self._script_rpc(msg.get("method") or "", msg.get("params") or {})
+                        result = await self._script_rpc(msg.get("method") or "", msg.get("params"))
                         proc.stdin.write(
-                            (json.dumps({"type": "ok", "id": msg["id"], "result": result}) + "\n").encode()
+                            (
+                                json.dumps(
+                                    {"type": "ok", "id": msg["id"], "result": result},
+                                    default=str,
+                                )
+                                + "\n"
+                            ).encode()
                         )
                     except Exception as e:
                         proc.stdin.write(
@@ -1053,15 +1125,17 @@ class BrowserSession:
                         )
                     await proc.stdin.drain()
                 elif kind == "done":
+                    finished = True
                     return {"status": "ok", "result": msg.get("result"), "logs": (msg.get("logs") or logs)[-20:]}
                 elif kind == "error":
+                    finished = True
                     return {
                         "status": "error",
                         "message": msg.get("message") or "script error",
                         "logs": (msg.get("logs") or logs)[-20:],
                     }
         finally:
-            if proc.returncode is None:
+            if not finished and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
@@ -1138,3 +1212,10 @@ registry = SessionRegistry(lambda name="default": BrowserSession(name=name))
 
 async def get_session(name: str = ""):
     return registry.get(name)
+
+
+@asynccontextmanager
+async def locked_session(name: str = ""):
+    sess = await get_session(name)
+    async with sess._lock:
+        yield sess

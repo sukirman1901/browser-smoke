@@ -4,7 +4,7 @@ MCP Playwright browser for agents: daily tasks (open, click, fill, scrape) and s
 
 Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
 
-See [CHANGELOG.md](CHANGELOG.md) for v1.3 sessions/persist/`browser_script`, v1.2.3 OpenCode `smoke_browser_open`, and earlier token defaults.
+See [CHANGELOG.md](CHANGELOG.md) for v1.3.1 session locks / persist CDP fixes, v1.3 sessions/persist/`browser_script`, v1.2.3 OpenCode `smoke_browser_open`, and earlier token defaults.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 
 | Tool | Description |
 |------|-------------|
-| `browser_open(url, persist?, session?, user_data_dir?, channel?)` | `persist=true` = detached Chromium (CDP). `session` isolates tasks |
+| `browser_open(url, persist?, session?, user_data_dir?, channel?)` | `persist=true` = detached Chromium (CDP). Pass `session=` on later tools too. Not with `channel`. |
 | `browser_session` | `current` / `use` / `list` / `close` |
 | `browser_script(js_code)` | JS snippet: open/click/type/snapshot/wait/execute (loops ok) |
 | `browser_run(actions_json)` | JSON batch, one call |
@@ -136,8 +136,8 @@ Daily agent (window survives MCP restart):
 
 ```
 browser_open(url="https://example.com", persist=true, session="work")
-browser_script(js_code="const s = await snapshot(); log(s.snapshot); await click('@1');")
-browser_close(shutdown=false)
+browser_script(js_code="const s = await snapshot(); log(s.snapshot); await click('@1');", session="work")
+browser_close(shutdown=false, session="work")
 ```
 
 Persistent login (Playwright profile, not your daily Chrome):
@@ -161,7 +161,7 @@ browser_download(selector="@8")
 | Masalah | Solusi |
 |---------|--------|
 | Chromium error | `npx browser-smoke init` lagi, atau `.browser-smoke/.venv/bin/playwright install chromium` |
-| Need real Chrome | `browser_open(..., channel="chrome")` |
+| Need real Chrome | `browser_open(..., channel="chrome")` (not with `persist=true`) |
 | Connection refused | Target app harus jalan |
 | Python not found | Python 3.10+ |
 | Old tools / screenshots on every click | `init` ulang — sync MCP files |

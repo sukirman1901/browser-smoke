@@ -50,9 +50,19 @@ function getPythonCmd() {
   process.exit(1);
 }
 
+function venvPython(venvDir) {
+  const candidates = process.platform === "win32"
+    ? [join(venvDir, "Scripts", "python.exe"), join(venvDir, "Scripts", "python")]
+    : [join(venvDir, "bin", "python3"), join(venvDir, "bin", "python")];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return candidates[0];
+}
+
 function stdMcpEntry(venvDir, mcpDir) {
   return {
-    command: join(venvDir, "bin", "python3"),
+    command: venvPython(venvDir),
     args: ["-m", "server"],
     cwd: mcpDir,
   };
@@ -80,7 +90,7 @@ function writeOpenCode(scope, venvDir, mcpDir) {
   if (!config.mcp) config.mcp = {};
   putMcp(config.mcp, {
     type: "local",
-    command: [join(venvDir, "bin", "python3"), "-m", "server"],
+    command: [venvPython(venvDir), "-m", "server"],
     cwd: mcpDir,
   });
   writeJson(configPath, config);
@@ -188,16 +198,18 @@ Pilih [1/2/3/4]: `);
   mkdirSync(targetDir, { recursive: true });
   cpSync(join(PKG_DIR, "mcp"), mcpDir, { recursive: true });
 
-  if (!existsSync(join(venvDir, "bin", "python3"))) {
+  const pyVenv = venvPython(venvDir);
+  if (!existsSync(pyVenv)) {
     console.log("\n📦 Creating Python virtual environment...");
     sh(`${python} -m venv "${venvDir}"`);
-    console.log("\n📦 Installing Python dependencies...");
-    sh(`"${join(venvDir, "bin", "pip")}" install -r "${join(mcpDir, "requirements.txt")}"`);
-    console.log("\n📦 Installing Playwright browser (Chromium)...");
-    sh(`"${join(venvDir, "bin", "playwright")}" install chromium`);
   } else {
-    console.log("\n✅ Virtual environment already exists. Skipping.");
+    console.log("\n✅ Virtual environment already exists. Refreshing deps.");
   }
+  const py = venvPython(venvDir);
+  console.log("\n📦 Installing Python dependencies...");
+  sh(`"${py}" -m pip install -r "${join(mcpDir, "requirements.txt")}"`);
+  console.log("\n📦 Installing Playwright browser (Chromium)...");
+  sh(`"${py}" -m playwright install chromium`);
 
   console.log("\n📝 Writing MCP config...");
   if (hosts.includes("opencode")) writeOpenCode(scope, venvDir, mcpDir);

@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-09-12
+
+Session isolation, persist CDP, and `browser_script` reliability.
+
+### Fixed
+
+- Every mutating/read tool accepts `session=` and takes that session's lock (not only open/run/script/close)
+- `browser_script` `wait("load")` no longer crashes Python (string RPC params are coerced)
+- Persist writes CDP state only after connect; spawn stderr goes to a log; shutdown kills the process group
+- `persist=true` + `channel=chrome` returns an error instead of silently ignoring channel
+- Persist reconnect sets viewport 1280×720; a new CDP context enables downloads
+- `init` always refreshes pip + Chromium; Windows uses `Scripts/python.exe`
+- Script host helpers: dialog, download, upload, select, switchTab; Node is not killed after a successful `done`
+
+### Changed
+
+- Pass `session=` on every tool when more than one named session is in use
+
 ## [1.3.0] - 2026-09-12
 
 Named sessions, persistent Chromium, and a JS snippet runner. Not Chrome profile migration or Task Spaces.
