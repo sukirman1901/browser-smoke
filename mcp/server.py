@@ -27,26 +27,12 @@ async def browser_open(
     wait_until: str = "domcontentloaded",
     channel: str = "",
     user_data_dir: str = "",
-    persist: bool = False,
+    persist: bool = True,
     cdp: str = "",
+    refs: bool = False,
     session: str = "",
 ) -> str:
-    """Open a URL. persist=true = our Chromium. cdp=9222 attaches to a Chrome you launched with remote debugging (not the daily Gmail profile on Chrome 136+). Pass session= on later tools."""
-    if persist and channel:
-        return dumps({
-            "status": "error",
-            "message": "persist=true cannot use channel; omit channel to use bundled Chromium",
-        })
-    if persist and cdp:
-        return dumps({
-            "status": "error",
-            "message": "cdp attach cannot be combined with persist",
-        })
-    if cdp and channel:
-        return dumps({
-            "status": "error",
-            "message": "cdp attach cannot be combined with channel",
-        })
+    """Open/reconnect the living Chromium. Then call browser_snapshot for @refs. persist=false is a throwaway test browser. cdp=9222 attaches to debug Chrome (not daily Gmail). refs=true includes a snapshot in this result."""
     async with locked_session(session) as sess:
         try:
             await sess.ensure_started(
@@ -63,16 +49,14 @@ async def browser_open(
             wait_until=wait_until,
             screenshot=screenshot,
             screenshot_base64=screenshot_base64,
+            refs=refs,
         )
-        result["session"] = sess.name
-        result["persist"] = sess.persist
-        result["attached"] = sess.attached
         return dumps(result)
 
 
 @mcp.tool()
 async def browser_snapshot(scope: str = "viewport", session: str = "") -> str:
-    """Compact accessibility snapshot with @refs. Prefer this over extract_dom. Click/type with selector='@1'."""
+    """Compact @refs for the current page. Call this to see what to click, and again to verify after navigation."""
     async with locked_session(session) as sess:
         return dumps(await sess.snapshot(scope))
 
@@ -187,16 +171,26 @@ async def browser_handle_dialog(action: str = "accept", prompt: str = "", sessio
 
 
 @mcp.tool()
-async def browser_set_files(selector: str, paths: str, session: str = "") -> str:
-    """Set input[type=file]. paths is a comma-separated list of absolute file paths."""
+async def browser_set_files(selector: str = "", paths: str = "", session: str = "") -> str:
+    """Set input[type=file], including hidden inputs. paths = comma-separated absolute paths. selector optional if one file input exists."""
     async with locked_session(session) as sess:
         return dumps(await sess.set_files(selector, paths))
 
 
 @mcp.tool()
-async def browser_download(selector: str, save_as: str = "", timeout: int = 30000, session: str = "") -> str:
-    """Click a download trigger and save the file under artifacts/downloads/."""
+async def browser_download(
+    selector: str = "",
+    url: str = "",
+    save_as: str = "",
+    timeout: int = 30000,
+    session: str = "",
+) -> str:
+    """Save a file. url= fetches (cookies included). selector= clicks a download link. Writes artifacts/downloads/."""
     async with locked_session(session) as sess:
+        if url:
+            return dumps(await sess.save_url(url, save_as))
+        if not selector:
+            return dumps({"status": "error", "message": "provide url= to fetch, or selector= to click a download"})
         return dumps(await sess.click_download(selector, save_as, timeout))
 
 
@@ -311,7 +305,7 @@ async def browser_report(results_json: str, include_report: bool = False, sessio
 
 @mcp.tool()
 async def browser_execute(js_code: str, session: str = "") -> str:
-    """Run JavaScript in the page and return a JSON result. Prefer this for scraping."""
+    """Run JavaScript in the page and return JSON. Returned Promises are awaited. Prefer this for scraping."""
     async with locked_session(session) as sess:
         if sess.page is None:
             return dumps({"status": "error", "message": "No page open. Call browser_open first."})
@@ -456,6 +450,7 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
                 "open": sess.page is not None,
                 "persist": bool(sess.persist or port),
                 "attached": sess.attached,
+                "mode": sess.mode,
                 "cdp": cdp_alive(port) if port else False,
             })
         if os.path.isdir(state_dir()):
@@ -473,6 +468,7 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
                     "open": False,
                     "persist": True,
                     "attached": False,
+                    "mode": "persist",
                     "cdp": cdp_alive(port) if port else False,
                 })
         return dumps({"current": registry.current, "sessions": rows})
@@ -490,14 +486,17 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
         "open": sess.page is not None,
         "persist": sess.persist,
         "attached": sess.attached,
+        "mode": sess.mode,
     })
 
 
 @mcp.tool()
-async def browser_close(shutdown: bool = True, session: str = "") -> str:
-    """Disconnect the session. shutdown=true kills persist Chromium. cdp-attached Chrome is never killed."""
+async def browser_close(shutdown: bool | None = None, session: str = "") -> str:
+    """Leave the living window up by default. shutdown=true kills persist Chromium. Attached debug Chrome is never killed."""
     async with locked_session(session) as sess:
         key = sess.name
+        if shutdown is None:
+            shutdown = not (sess.persist or sess.attached)
         await sess.close(shutdown=shutdown)
     if shutdown:
         registry.drop(key)

@@ -13,6 +13,8 @@ MAX_RESULT_CHARS = 24_000
 LOG_CAP = 40
 LOG_TEXT_CHARS = 240
 LOG_MEM_CAP = 200
+MAX_SNAPSHOT_ITEMS = 80
+HREF_CHARS = 40
 
 
 def dumps(obj: Any) -> str:
@@ -63,14 +65,34 @@ def format_snapshot_lines(items: list[dict]) -> str:
         extra = []
         if item.get("iframe"):
             extra.append("iframe")
+        if item.get("hidden"):
+            extra.append("hidden")
         if item.get("type"):
             extra.append(item["type"])
         if item.get("href"):
-            extra.append(item["href"])
+            extra.append(item["href"][:HREF_CHARS])
         suffix = f" {' '.join(extra)}" if extra else ""
         quoted = f' "{name}"' if name else ""
         lines.append(f"@{ref} {role}{quoted}{suffix}")
     return "\n".join(lines)
+
+
+def cap_snapshot_items(
+    items: list[dict], limit: int = MAX_SNAPSHOT_ITEMS
+) -> tuple[list[dict], int]:
+    """Keep file/hidden and cross-origin markers; drop the rest of a huge page."""
+    total = len(items)
+    if total <= limit:
+        return items, total
+    pinned: list[dict] = []
+    others: list[dict] = []
+    for item in items:
+        if item.get("hidden") or item.get("name") == "cross-origin":
+            pinned.append(item)
+        else:
+            others.append(item)
+    room = max(0, limit - len(pinned))
+    return pinned + others[:room], total
 
 
 def clip_logs(entries: list[dict], *, include_url: bool = False) -> list[dict]:

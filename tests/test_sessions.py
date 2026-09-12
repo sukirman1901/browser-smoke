@@ -10,6 +10,7 @@ from tools.persist import (
     kill_pid,
     normalize_cdp_endpoint,
     port_free,
+    resolve_launch_mode,
     safe_session_name,
     session_cdp_port,
 )
@@ -42,6 +43,28 @@ class PersistHelperTests(unittest.TestCase):
             normalize_cdp_endpoint("127.0.0.1:9222"),
             "http://127.0.0.1:9222",
         )
+
+    def test_resolve_launch_mode_default_is_persist(self):
+        self.assertEqual(resolve_launch_mode()["mode"], "persist")
+        self.assertTrue(resolve_launch_mode()["persist"])
+
+    def test_resolve_cdp_wins_over_default_persist(self):
+        got = resolve_launch_mode(persist=True, cdp="9222")
+        self.assertEqual(got["mode"], "attach")
+        self.assertFalse(got["persist"])
+        self.assertEqual(got["cdp"], "9222")
+
+    def test_resolve_channel_is_ephemeral_chrome(self):
+        got = resolve_launch_mode(persist=True, channel="chrome")
+        self.assertEqual(got["mode"], "channel")
+        self.assertFalse(got["persist"])
+
+    def test_resolve_persist_false_is_ephemeral(self):
+        self.assertEqual(resolve_launch_mode(persist=False)["mode"], "ephemeral")
+
+    def test_resolve_cdp_and_channel_error(self):
+        with self.assertRaises(ValueError):
+            resolve_launch_mode(cdp="9222", channel="chrome")
 
 
 class RegistryTests(unittest.TestCase):

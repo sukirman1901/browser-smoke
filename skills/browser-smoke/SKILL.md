@@ -7,77 +7,74 @@ description: Use when controlling a browser from the agent — daily tasks (open
 
 Do **not** return images unless the user asks for a visual check.
 
-1. `browser_open` then `browser_snapshot` (or `browser_execute` for scrape).
-2. Click/type with `@n` from the last snapshot. After navigation, snapshot again — stale `@n` errors.
-3. Multi-step: `browser_script` (loops) or one `browser_run`, not a chain of MCP tools.
-4. Screenshot only for visual bugs. Never `screenshot_base64`.
-5. Scrape: `browser_execute` returning a small JSON array. No `innerHTML`.
+1. `browser_open` then **`browser_snapshot`** to see `@1`, `@2`, `@3`. That list is the selector map.
+2. Click/type those `@n`. Do not invent CSS if a ref exists.
+3. After navigation, a new page, an error `Expired ref`, or if you are unsure which control to use: **snapshot again**. That is verification.
+4. Several steps → one `browser_script` (call `snapshot()` inside after nav) or one `browser_run`. Do not chain eight execute/DOM probes.
+5. Never `screenshot_base64`. Screenshot only for a visual bug.
+6. Scrape: `browser_execute` returning a **small JSON array**. No `innerHTML`.
 
-## Core loop
+Never skip snapshot when checking that a submit/publish/login worked. `open refs=true` is optional if you already need the map in the same call.
 
-Daily task or smoke — same tools:
+## One living browser (default)
+
+`browser_open url=...` reconnects Smoke Chromium (persist). Same window next chat. Do **not** pass `persist=true`. Do **not** pass `cdp=` unless asked.
 
 ```
 browser_open url=...
 browser_snapshot
+browser_script js_code="await click('@1'); await type('@2', '...');"
+```
+
+`browser_close` leaves the window. `shutdown=true` only to quit.
+
+This is not the user's daily Chrome / Gmail.
+
+## Isolated smoke test
+
+```
+browser_open url=http://localhost:5173 persist=false session=test
+browser_snapshot
 browser_run actions_json=[{"action":"type","selector":"@1","text":"..."},{"action":"click","selector":"@2"}]
+browser_console
+browser_errors
+browser_close shutdown=true session=test
 ```
 
-Smoke extras (optional): `browser_console`, `browser_errors`, `browser_report`, then `browser_close`.
+Failures block. Debug with console, errors, then snapshot — not a screenshot.
 
-Failures block. Debug with console, errors, network_capture `mode=get` (no headers), then `browser_execute`. Screenshot last.
+## Other modes
 
-Daily task (window stays up):
-
-```
-browser_open url=... persist=true session=work
-browser_script js_code="await snapshot(); await click('@1'); log(await execute('() => document.title'))"
-```
-
-`browser_close shutdown=false` leaves Chromium running. Next chat: `browser_open persist=true session=work` reconnects.
-
-Two named sessions: pass `session=` on **every** tool (`snapshot`, `click`, `script`, `close`), not only `open`. `persist=true` cannot be combined with `channel` or `cdp`.
-
-Logged-in Playwright profile (not Chrome's daily profile):
-
-`browser_open url=... user_data_dir=".browser-smoke/profile"`
-
-Attach to a debug Chrome (not daily Gmail; Chrome 136+ ignores remote debugging on the default profile):
-
-Launch Chrome with `--remote-debugging-port=9222` and `--user-data-dir=$HOME/.browser-smoke/chrome-attach`, then `browser_open url=... cdp=9222`. Close disconnects; it does not quit that Chrome.
+Named sessions: `session=` on **every** tool. `channel=chrome` is throwaway stock Chrome. `cdp=9222` is debug Chrome the user launched.
 
 ## Tools
 
 | Tool | Use |
 |------|-----|
-| `browser_open(url, persist?, session?, user_data_dir?, cdp?)` | `persist=true` keeps our Chromium. `cdp=9222` attaches to debug Chrome. |
-| `browser_session` | `use` / `list` / `close` named sessions. |
-| `browser_script(js_code)` | JS snippet with open/click/type/snapshot/wait/execute. Prefer for loops. |
-| `browser_run(actions_json)` | JSON batch when you do not need loops. |
-| `browser_snapshot(scope?)` | `@ref` list, same-origin iframes tagged `iframe`. |
-| `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | Selector or `@n`. `click` accepts `dialog` and `popup`. |
-| `browser_select_option` / `browser_set_files` / `browser_download` | Forms and files. |
-| `browser_handle_dialog(action, prompt?)` | Only if the trigger is not a click. Prefer `click(..., dialog=accept)`. |
-| `browser_wait` / `browser_reload` / `browser_scroll` | URL, selector, load, or `js` waitForFunction. |
-| `browser_execute` | Scrape / inspect JSON. |
-| `browser_screenshot` / `screenshot_diff` / `highlight` | Visual, on demand. |
-| `browser_console` / `errors` / `network_capture` / cookies / storage | Evidence. |
-| `browser_report` / `close` / tabs / offscreen | Wrap-up. |
+| `browser_open` | Living Chromium. Then snapshot. `persist=false` = test. `refs=true` = include @n in open (opt-in). |
+| `browser_snapshot` | **How you understand and verify the page.** `@n` for click/type. |
+| `browser_script` | Default for 2+ steps. `snapshot()` / `click('@n')` / `type` / `wait` / `execute` inside. |
+| `browser_run` | JSON batch, no loops. |
+| `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | `@n` from the last snapshot. |
+| `browser_select_option` / `browser_set_files` / `browser_download` | `download url=` fetches a file. `set_files` fills hidden file inputs. |
+| `browser_execute` | Tiny JSON only. Not a replacement for snapshot. |
+| `browser_close` | Does not quit unless `shutdown=true`. |
 
-## Files, dialogs, popups
+## Files
 
 ```
-browser_click selector=@4 dialog=accept
-browser_click selector=@5 popup=true
-browser_switch_tab index=0
-browser_set_files selector=@7 paths="/abs/path/cv.pdf"
-browser_download selector=@8
+browser_snapshot
+browser_download url="https://example.com/a.jpg" save_as=hero.jpg
+browser_set_files selector=@7 paths="/abs/path/hero.jpg"
 ```
+
+`iframe "cross-origin"` = cannot click inside. Do not loop. Insert by URL/HTML once, or `set_files` on `file hidden`.
+
+If type/paste fail on an editor: **one** `execute` to set the value, then snapshot to verify.
 
 ## Scrape
 
 ```
 browser_open url="https://example.com"
 browser_execute js_code="() => [...document.querySelectorAll('a')].slice(0,50).map(a => ({t:a.textContent.trim(), h:a.href}))"
-browser_close
 ```

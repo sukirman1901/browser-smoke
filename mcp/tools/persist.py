@@ -79,6 +79,30 @@ def normalize_cdp_endpoint(raw: str) -> str:
     return s
 
 
+def resolve_launch_mode(
+    persist: bool = True,
+    cdp: str = "",
+    channel: str = "",
+) -> dict[str, Any]:
+    """Pick one launch mode. Default is a living Chromium (persist).
+
+    Priority: cdp attach > channel > persist=false ephemeral > persist.
+    cdp/channel force persist off so `cdp=9222` works without persist=false
+    (the tool default is persist=true).
+    """
+    cdp = (cdp or "").strip()
+    channel = (channel or "").strip()
+    if cdp and channel:
+        raise ValueError("cdp attach cannot be combined with channel")
+    if cdp:
+        return {"mode": "attach", "persist": False, "cdp": cdp, "channel": ""}
+    if channel:
+        return {"mode": "channel", "persist": False, "cdp": "", "channel": channel}
+    if persist:
+        return {"mode": "persist", "persist": True, "cdp": "", "channel": ""}
+    return {"mode": "ephemeral", "persist": False, "cdp": "", "channel": ""}
+
+
 def port_free(port: int) -> bool:
     sock = socket.socket()
     try:

@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 from tools.dom_extractor import classify_inputs, guess_input_value
 from tools.payload import (
     MAX_RESULT_CHARS,
+    cap_snapshot_items,
     compact_classified,
     compact_network,
     dumps,
@@ -49,6 +50,28 @@ class PayloadTests(unittest.TestCase):
             [{"ref": 4, "role": "button", "name": "Pay", "iframe": True}]
         )
         self.assertEqual(text, '@4 button "Pay" iframe')
+
+    def test_snapshot_marks_hidden_file(self):
+        text = format_snapshot_lines(
+            [{"ref": 7, "role": "file", "name": "Upload", "type": "file", "hidden": True}]
+        )
+        self.assertEqual(text, '@7 file "Upload" hidden file')
+
+    def test_href_is_clipped(self):
+        href = "https://example.com/" + ("a" * 80)
+        text = format_snapshot_lines(
+            [{"ref": 1, "role": "link", "name": "X", "href": href}]
+        )
+        tail = text.split(" ")[-1]
+        self.assertEqual(len(tail), 40)
+
+    def test_cap_keeps_hidden_file(self):
+        items = [{"ref": i, "role": "link", "name": str(i)} for i in range(1, 91)]
+        items.append({"ref": 99, "role": "file", "name": "up", "hidden": True})
+        shown, total = cap_snapshot_items(items, limit=10)
+        self.assertEqual(total, 91)
+        self.assertEqual(len(shown), 10)
+        self.assertTrue(any(x.get("hidden") for x in shown))
 
     def test_compact_classified_drops_rects(self):
         classified = {

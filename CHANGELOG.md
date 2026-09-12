@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-12
+
+Living Chromium is the default. Isolated test Chromium is opt-in.
+
+### Changed
+
+- `browser_open` defaults to `persist=true` (one window that survives MCP restart)
+- `browser_close` with no `shutdown` leaves that window up; `shutdown=true` kills it
+- `cdp=` and `channel=` still work without passing `persist=false` (attach/channel win)
+- Smoke tests must pass `persist=false` or they reuse the living profile
+- `browser_snapshot` is how the agent reads and verifies `@n`. Open does not include a snapshot unless `refs=true`
+- Snapshot is capped at 80 lines; huge pages set `truncated`
+
+### Added
+
+- Snapshot includes `[role=menuitem]` and hidden `input[type=file]` (tagged `hidden`)
+- Cross-origin iframes (Google picker) show as `@n iframe "cross-origin"` instead of going missing
+- Click prefers the visible match; retries `force` once if Playwright says not visible / intercepted
+- `browser_set_files` fills hidden file inputs and searches same-origin frames
+- `browser_download url=...` fetches a file (browser cookies) to `artifacts/downloads/`
+
+### Notes
+
+This is not your daily Chrome and not Chrome debug. It is Smoke's own Chromium under `.browser-smoke/profiles/<session>`.
+
 ## [1.3.4] - 2026-09-12
 
 Attach to a Chrome you launched with remote debugging.

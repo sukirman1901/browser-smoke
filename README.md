@@ -4,7 +4,7 @@ A Playwright browser your coding agent can drive: open a site, fill a form, scra
 
 MCP server id is **`smoke`**. In OpenCode the tools are `smoke_browser_open`, `smoke_browser_snapshot`, … Cursor and Claude Code call the same tools without the prefix (`browser_open`).
 
-Results are compact JSON. Screenshots stay off unless you ask. This is **not** your daily Chrome — the agent gets its own Chromium. See [What this is not](#what-this-is-not).
+Results are compact JSON. Screenshots stay off unless you ask. The agent gets **its own living Chromium** (persist by default) — not the Chrome where you read Gmail. See [What this is not](#what-this-is-not).
 
 Works with [OpenCode](https://opencode.ai), [Cursor](https://cursor.com), [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and any MCP client.
 
@@ -48,42 +48,40 @@ Use smoke: open https://example.com, take a snapshot, tell me the title and the 
 Same loop for a daily task and a smoke test (OpenCode names):
 
 1. `smoke_browser_open` the URL.
-2. `smoke_browser_snapshot` — you get `@1`, `@2`, `@3` for buttons, inputs, links.
-3. Click or type those refs (`@1`). After navigation, snapshot again. Old refs error on purpose.
-4. For several steps, prefer **one** `smoke_browser_script` (loops allowed) or one `smoke_browser_run`. Do not chain eight MCP calls.
+2. `smoke_browser_snapshot` — this is the selector map: `@1`, `@2`, `@3`.
+3. Click or type those refs. After navigation, if a ref errors, or to verify a result: snapshot again.
+4. Several steps: **one** `smoke_browser_script` (or one `smoke_browser_run`). Do not chain eight MCP execute calls.
 5. Scrape with `smoke_browser_execute` returning a small JSON array — not `innerHTML`.
 6. Screenshot only for a visual bug. Never `screenshot_base64`.
 
 ## Daily task (window stays up)
 
-Use this when the agent should browse the way you would: open a site, click around, leave the window open for the next chat.
+This is the default. `smoke_browser_open` starts or reconnects **one** Smoke Chromium. Do not pass `persist=true` (it is already on). Do not launch Chrome debug unless you mean `cdp=`.
 
 ```
-smoke_browser_open url=https://example.com persist=true session=work
-smoke_browser_script js_code="const s = await snapshot(); log(s.snapshot); await click('@1');" session=work
-smoke_browser_close shutdown=false session=work
+smoke_browser_open url=https://example.com
+smoke_browser_snapshot
+smoke_browser_script js_code="await click('@1'); await type('@2', 'hi');"
 ```
 
-- `persist=true` starts a detached Chromium (CDP). It survives MCP restart.
-- `shutdown=false` disconnects without killing the window.
-- Next chat: `smoke_browser_open` again with `persist=true session=work` reconnects.
+Leave the window. Next chat, `smoke_browser_open` the next URL — same window, cookies kept. `smoke_browser_close` disconnects; it does **not** quit Chromium. Pass `shutdown=true` only when you want the window gone.
 
-If two named sessions are open, pass `session=` on **every** tool, not only open.
+Named sessions (`session=work`) if two tasks must not share tabs. Then pass `session=` on **every** tool.
 
 Helpers inside `smoke_browser_script`: `open`, `click`, `type`, `snapshot`, `wait`, `execute`, `press`, `hover`, `scroll`, `dialog`, `download`, `upload`, `select`, `switchTab`. `wait("load")` and `wait("#ready")` are fine.
 
 ## Smoke test (after you ship a feature)
 
-Use this when a local app should still load, submit a form, and stay quiet in the console.
+Throwaway browser — **must** `persist=false` or you pollute the living profile.
 
 ```
-smoke_browser_open url=http://localhost:5173
+smoke_browser_open url=http://localhost:5173 persist=false session=test
 smoke_browser_snapshot
 smoke_browser_run actions_json='[{"action":"type","selector":"@1","text":"test@test.com"},{"action":"click","selector":"@3"}]'
 smoke_browser_console
 smoke_browser_errors
 smoke_browser_report results_json
-smoke_browser_close
+smoke_browser_close shutdown=true session=test
 ```
 
 The app must already be running. Failures should block. Debug with console, errors, then `smoke_browser_network_capture` `mode=get` (no headers). Screenshot last.
@@ -101,12 +99,15 @@ Writes a baseline/diff under `artifacts/`. No PNG in the tool result unless you 
 ```
 smoke_browser_open url=https://example.com
 smoke_browser_execute js_code="() => [...document.querySelectorAll('a')].slice(0,50).map(a => ({t:a.textContent.trim(), h:a.href}))"
-smoke_browser_close
 ```
+
+`smoke_browser_close` is optional; it does not quit the living window.
 
 ## Keep a login (Playwright profile, not Chrome)
 
-The agent can log in once and reuse that session next time — in **its** Chromium, not the Chrome you use every day.
+Default persist already keeps cookies in `.browser-smoke/profiles/<session>`. Log in once in that window.
+
+Custom dir:
 
 ```
 smoke_browser_open url=https://app.example.com user_data_dir=.browser-smoke/profile
@@ -114,7 +115,7 @@ smoke_browser_open url=https://app.example.com user_data_dir=.browser-smoke/prof
 
 Cookies live in that folder. Gmail already open in your Chrome will not appear here.
 
-Need stock Chrome instead of bundled Chromium? `channel=chrome`. Do not combine `channel` with `persist=true` or `cdp=`.
+Need stock Chrome instead of bundled Chromium? `channel=chrome` (throwaway, not the living profile). `cdp=` attaches to a debug Chrome you launched.
 
 ## Attach to a debug Chrome (`cdp=`)
 
@@ -140,7 +141,7 @@ smoke_browser_snapshot
 smoke_browser_close
 ```
 
-`cdp=` also accepts `http://127.0.0.1:9222` or a `ws://` DevTools URL. `smoke_browser_close` disconnects; it does **not** quit that Chrome. Do not combine `cdp` with `persist` or `channel`.
+`cdp=` also accepts `http://127.0.0.1:9222` or a `ws://` DevTools URL. You do not need `persist=false`. `smoke_browser_close` disconnects; it does **not** quit that Chrome. Do not combine `cdp` with `channel`.
 
 ## Forms, files, dialogs, popups
 
@@ -150,7 +151,8 @@ Snapshot first, then:
 smoke_browser_click selector=@4 dialog=accept
 smoke_browser_click selector=@5 popup=true
 smoke_browser_switch_tab index=0
-smoke_browser_set_files selector=@7 paths=/abs/path/cv.pdf
+smoke_browser_download url=https://images.unsplash.com/photo-xyz save_as=hero.jpg
+smoke_browser_set_files selector=@7 paths=/abs/path/hero.jpg
 smoke_browser_download selector=@8
 ```
 
@@ -160,9 +162,10 @@ Prefer `dialog=accept` on the click that opens the alert. Arm the next dialog on
 
 | You might expect | What you actually get |
 |------------------|------------------------|
-| Agent uses the Chrome window you are looking at | Separate Playwright Chromium. `cdp=` attaches only to a debug Chrome you launched |
-| Gmail / cookies from your daily Chrome | Empty unless the agent logs in, you set `user_data_dir`, or you log in inside the debug Chrome (`cdp=`) |
-| Window dies when the chat ends | Only if you close with `shutdown=true`. Persist + `shutdown=false` keeps it |
+| Agent uses the Chrome window you are looking at | Smoke's own living Chromium. `cdp=` attaches only to a debug Chrome you launched |
+| Gmail / cookies from your daily Chrome | Empty unless the agent logs in inside Smoke (or debug Chrome with `cdp=`) |
+| A second “testing” Chromium on every open | Only if the agent passes `persist=false`. Default open reuses one window |
+| Window dies when the chat ends | Only if you `close` with `shutdown=true` |
 | Task Spaces / take over from the agent | Named MCP sessions. You do not share tabs with the agent |
 | Screenshot on every click | Path on disk only when `screenshot=true` |
 | `npx smoke` | Different npm package. Install from the GitHub command above |
@@ -184,13 +187,13 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 
 | Tool | When to use |
 |------|-------------|
-| `smoke_browser_open(url, persist?, session?, user_data_dir?, channel?, cdp?)` | Start, persist Chromium, or attach (`cdp=9222`). Pass `session=` on later tools too |
+| `smoke_browser_open(url, persist?, session?, user_data_dir?, channel?, cdp?)` | Default = living Chromium. `persist=false` = test. `cdp=9222` = debug Chrome |
 | `smoke_browser_session` | `current` / `use` / `list` / `close` named sessions |
 | `smoke_browser_script(js_code)` | One round trip with loops |
 | `smoke_browser_run(actions_json)` | JSON batch, no loops |
 | `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs |
 | `smoke_browser_scroll` / `reload` / `hover` / `press` | Scroll (default down 200px), reload, menus, keys |
-| `smoke_browser_close(shutdown?)` | `shutdown=false` leaves persist Chromium. Attached Chrome is never killed |
+| `smoke_browser_close(shutdown?)` | Default leaves the living window. `shutdown=true` kills persist Chromium |
 
 ### Click, type, files
 
@@ -223,9 +226,10 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | Chromium missing / launch error | Run the GitHub `npx` command again, or `.browser-smoke/.venv/bin/playwright install chromium` |
 | Tools look stale, or every click returns a screenshot | Run setup again and restart the host |
 | OpenCode shows `browser-smoke_browser_open` | Old MCP key. Setup writes id `smoke` |
-| `persist=true` + `channel=chrome` errors | Omit `channel`. Persist is bundled Chromium only |
+| Two Chromium windows | Default open is persist. Do not also pass `persist=false` or `cdp=` unless you mean it |
+| Smoke test reused login cookies | Pass `persist=false session=test` |
 | CDP connect failed / Chrome 136+ | Daily Gmail Chrome cannot be attached. Launch debug Chrome with a non-default `--user-data-dir` and `cdp=9222` |
-| `cdp` + `persist` / `channel` errors | Use only `cdp=` |
+| `cdp` + `channel` errors | Use only one |
 | Connection refused | The target app is not running |
 | Python not found | Install Python 3.10+ |
 | Two sessions keep hitting the same tab | Pass `session=` on every tool |
@@ -242,7 +246,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.3.4**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.0**.
 
 ## License
 

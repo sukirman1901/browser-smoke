@@ -14,6 +14,7 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from tools.image_diff import compare_png
 from tools.payload import (
     cap_append,
+    cap_snapshot_items,
     format_snapshot_lines,
     matches_url,
     safe_artifact_name,
@@ -28,6 +29,7 @@ SNAPSHOT_JS = """
     if (tag === "button") return "button";
     if (tag === "input") {
       const t = (el.getAttribute("type") || "text").toLowerCase();
+      if (t === "file") return "file";
       if (t === "submit" || t === "button") return "button";
       if (t === "checkbox") return "checkbox";
       if (t === "radio") return "radio";
@@ -37,14 +39,13 @@ SNAPSHOT_JS = """
     if (tag === "textarea") return "textbox";
     return el.getAttribute("role") || tag;
   };
-  document.querySelectorAll("[data-bs-ref]").forEach((el) => el.removeAttribute("data-bs-ref"));
-  const selector = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [tabindex]:not([tabindex="-1"])';
-  const items = [];
-  let n = start;
-  document.querySelectorAll(selector).forEach((el) => {
+  const visible = (el) => {
     const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    if (!full && (rect.bottom < 0 || rect.top > window.innerHeight)) return;
+    if (rect.width === 0 || rect.height === 0) return false;
+    if (!full && (rect.bottom < 0 || rect.top > window.innerHeight)) return false;
+    return true;
+  };
+  const push = (el, hidden) => {
     const role = el.getAttribute("role") || implicit(el);
     const name = (
       el.getAttribute("aria-label") ||
@@ -54,15 +55,29 @@ SNAPSHOT_JS = """
       (el.textContent || "")
     ).trim().replace(/\\s+/g, " ").slice(0, 60);
     el.setAttribute("data-bs-ref", String(n));
-    items.push({
+    const item = {
       ref: n,
       role,
       name,
       tag: el.tagName.toLowerCase(),
       type: el.getAttribute("type") || undefined,
       href: el.getAttribute("href") || undefined,
-    });
+    };
+    if (hidden) item.hidden = true;
+    items.push(item);
     n += 1;
+  };
+  document.querySelectorAll("[data-bs-ref]").forEach((el) => el.removeAttribute("data-bs-ref"));
+  const selector = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="menuitem"], [role="option"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+  const items = [];
+  let n = start;
+  document.querySelectorAll(selector).forEach((el) => {
+    if (!visible(el)) return;
+    push(el, false);
+  });
+  document.querySelectorAll('input[type="file"]').forEach((el) => {
+    if (el.hasAttribute("data-bs-ref")) return;
+    push(el, true);
   });
   return {items, next: n};
 }
@@ -91,8 +106,9 @@ class BrowserSession:
     _listened_pages: set[int] = field(default_factory=set)
     _block_route_installed: bool = False
     name: str = "default"
-    persist: bool = False
+    persist: bool = True
     attached: bool = False
+    mode: str = "persist"
     _cdp_port: Optional[int] = None
     _chrome_pid: Optional[int] = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -113,7 +129,7 @@ class BrowserSession:
         headless: bool = False,
         channel: str = "",
         user_data_dir: str = "",
-        persist: bool = False,
+        persist: bool = True,
         cdp: str = "",
     ):
         from tools.persist import (
@@ -123,18 +139,17 @@ class BrowserSession:
             normalize_cdp_endpoint,
             pid_on_port,
             read_state,
+            resolve_launch_mode,
             spawn_chromium,
             state_dir,
             write_state,
         )
 
-        if persist and channel:
-            raise ValueError("persist=true cannot use channel; omit channel to use bundled Chromium")
-        if cdp and persist:
-            raise ValueError("cdp attach cannot be combined with persist")
-        if cdp and channel:
-            raise ValueError("cdp attach cannot be combined with channel")
-
+        mode = resolve_launch_mode(persist=persist, cdp=cdp, channel=channel)
+        persist = bool(mode["persist"])
+        cdp = str(mode["cdp"])
+        channel = str(mode["channel"])
+        self.mode = str(mode["mode"])
         self.persist = persist
         self.attached = False
         self._pw = await async_playwright().start()
@@ -248,7 +263,7 @@ class BrowserSession:
         headless: bool = False,
         channel: str = "",
         user_data_dir: str = "",
-        persist: bool = False,
+        persist: bool | None = None,
         cdp: str = "",
     ):
         if self.page is None:
@@ -256,7 +271,7 @@ class BrowserSession:
                 headless=headless,
                 channel=channel,
                 user_data_dir=user_data_dir,
-                persist=persist or self.persist,
+                persist=self.persist if persist is None else persist,
                 cdp=cdp,
             )
 
@@ -305,21 +320,31 @@ class BrowserSession:
             return mapped
         return selector
 
-    async def _locator(self, selector: str):
+    async def _locator(self, selector: str, *, hidden_ok: bool = False):
         is_ref = selector.startswith("@") and selector[1:].isdigit()
         target = self._target(selector)
         if isinstance(target, str):
-            loc = self.page.locator(target).first
+            loc = self.page.locator(target)
         else:
             frame = target.get("frame") or ""
             loc = (
                 self.page.frame_locator(frame).locator(target["sel"])
                 if frame
                 else self.page.locator(target["sel"])
-            ).first
-        if is_ref and await loc.count() == 0:
+            )
+        count = await loc.count()
+        if is_ref and count == 0:
             raise ValueError(f"Expired ref {selector}. Call browser_snapshot again.")
-        return loc
+        if count <= 1 or hidden_ok:
+            return loc.first
+        for i in range(count):
+            nth = loc.nth(i)
+            try:
+                if await nth.is_visible():
+                    return nth
+            except Exception:
+                continue
+        return loc.last
 
     def _on_new_page(self, page: Page):
         if page not in self._pages:
@@ -398,6 +423,16 @@ class BrowserSession:
             out["screenshot"] = base64.b64encode(png).decode()
         return out
 
+    async def _refs_fields(self) -> dict:
+        snap = await self.snapshot()
+        if snap.get("status") == "error":
+            return {}
+        out = {"snapshot": snap.get("snapshot"), "count": snap.get("count")}
+        if snap.get("truncated"):
+            out["truncated"] = True
+            out["total"] = snap.get("total")
+        return out
+
     async def open(
         self,
         url: str,
@@ -405,6 +440,7 @@ class BrowserSession:
         wait_until: str = "domcontentloaded",
         screenshot: bool = False,
         screenshot_base64: bool = False,
+        refs: bool = False,
     ) -> dict:
         if not self.page:
             await self.ensure_started()
@@ -418,8 +454,14 @@ class BrowserSession:
                 "title": title,
                 "url": self.page.url,
                 "status_code": response.status if response else None,
+                "session": self.name,
+                "persist": self.persist,
+                "attached": self.attached,
+                "mode": self.mode,
             }
             result.update(await self._shot_fields(screenshot, screenshot_base64))
+            if refs:
+                result.update(await self._refs_fields())
             return result
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -477,15 +519,33 @@ class BrowserSession:
             items.append(item)
         count = await self.page.locator("iframe").count()
         for i in range(count):
-            handle = await self.page.locator("iframe").nth(i).element_handle()
+            frame_loc = self.page.locator("iframe").nth(i)
+            src = (await frame_loc.get_attribute("src")) or ""
+            handle = await frame_loc.element_handle()
             if handle is None:
                 continue
             content = await handle.content_frame()
             if content is None:
+                items.append({
+                    "ref": n,
+                    "role": "iframe",
+                    "name": "cross-origin",
+                    "href": src[:80],
+                    "iframe": True,
+                })
+                n += 1
                 continue
             try:
                 payload = await content.evaluate(SNAPSHOT_JS, {"full": full, "start": n})
             except Exception:
+                items.append({
+                    "ref": n,
+                    "role": "iframe",
+                    "name": "cross-origin",
+                    "href": src[:80],
+                    "iframe": True,
+                })
+                n += 1
                 continue
             n = payload["next"]
             frame_sel = f"iframe >> nth={i}"
@@ -496,12 +556,19 @@ class BrowserSession:
                     "frame": frame_sel,
                 }
                 items.append(item)
-        return {
+        shown, total = cap_snapshot_items(items)
+        kept = {str(item["ref"]) for item in shown}
+        self._refs = {k: v for k, v in self._refs.items() if k in kept}
+        out = {
             "status": "ok",
             "url": self.page.url,
-            "count": len(items),
-            "snapshot": format_snapshot_lines(items),
+            "count": len(shown),
+            "snapshot": format_snapshot_lines(shown),
         }
+        if total > len(shown):
+            out["truncated"] = True
+            out["total"] = total
+        return out
 
     def _arm_dialog(self, dialog: str, prompt: str = "") -> dict | None:
         if not dialog:
@@ -560,8 +627,24 @@ class BrowserSession:
                     "hint": "Call browser_snapshot again. browser_switch_tab to return.",
                 }
             else:
-                await loc.click(timeout=wait_ms)
-                result = {"status": "ok", "url": self.page.url}
+                try:
+                    await loc.click(timeout=wait_ms)
+                    result = {"status": "ok", "url": self.page.url}
+                except Exception as click_err:
+                    msg = str(click_err).lower()
+                    retry = any(
+                        s in msg
+                        for s in (
+                            "not visible",
+                            "intercepts pointer",
+                            "outside of the viewport",
+                            "not receive pointer",
+                        )
+                    )
+                    if not retry:
+                        raise
+                    await loc.click(timeout=wait_ms, force=True)
+                    result = {"status": "ok", "url": self.page.url, "forced": True}
             if self._last_dialog:
                 result["dialog"] = self._last_dialog
                 self._last_dialog = None
@@ -902,6 +985,21 @@ class BrowserSession:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    async def _find_file_input(self):
+        loc = self.page.locator('input[type="file"]')
+        if await loc.count():
+            return loc.first
+        for frame in self.page.frames:
+            if frame == self.page.main_frame:
+                continue
+            fl = frame.locator('input[type="file"]')
+            try:
+                if await fl.count():
+                    return fl.first
+            except Exception:
+                continue
+        return None
+
     async def set_files(self, selector: str, paths: str) -> dict:
         err = self._need_page()
         if err:
@@ -912,8 +1010,62 @@ class BrowserSession:
         missing = [p for p in files if not os.path.exists(p)]
         if missing:
             return {"status": "error", "message": f"missing files: {missing}"}
-        await (await self._locator(selector)).set_input_files(files)
-        return {"status": "ok", "files": [os.path.basename(p) for p in files]}
+        loc = None
+        if selector.strip():
+            try:
+                loc = await self._locator(selector, hidden_ok=True)
+                await loc.set_input_files(files)
+                return {"status": "ok", "files": [os.path.basename(p) for p in files]}
+            except Exception:
+                loc = None
+        found = await self._find_file_input()
+        if found is None:
+            return {
+                "status": "error",
+                "message": (
+                    "No input[type=file] in this document (hidden inputs included). "
+                    "A Google/OS picker iframe is cross-origin and cannot be filled. "
+                    "Save the file with browser_download url=... then insert by URL/HTML, "
+                    "or set_files on a snapshot ref tagged file hidden."
+                ),
+            }
+        await found.set_input_files(files)
+        return {"status": "ok", "files": [os.path.basename(p) for p in files], "auto": True}
+
+    async def save_url(self, url: str, save_as: str = "") -> dict:
+        err = self._need_context()
+        if err:
+            return err
+        dest_dir = os.path.join(os.getcwd(), "artifacts", "downloads")
+        os.makedirs(dest_dir, exist_ok=True)
+        try:
+            resp = await self.context.request.get(url)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        if not resp.ok:
+            return {"status": "error", "message": f"HTTP {resp.status}", "url": url}
+        body = await resp.body()
+        ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
+        guessed = save_as
+        if not guessed:
+            path_name = url.split("?", 1)[0].rstrip("/").split("/")[-1] or "download"
+            if "." not in path_name:
+                ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}.get(
+                    ctype, ""
+                )
+                path_name = path_name + ext
+            guessed = path_name
+        path = os.path.join(dest_dir, safe_artifact_name(guessed, "download"))
+        with open(path, "wb") as f:
+            f.write(body)
+        return {
+            "status": "ok",
+            "path": path,
+            "filename": os.path.basename(path),
+            "bytes": len(body),
+            "content_type": ctype,
+            "url": url,
+        }
 
     async def click_download(self, selector: str, save_as: str = "", timeout: int = 30000) -> dict:
         err = self._need_page()
@@ -1032,9 +1184,14 @@ class BrowserSession:
                 index=int(raw.get("index", -1)),
             )
         if action in ("set_files", "upload"):
-            return await self.set_files(raw["selector"], raw.get("paths") or raw.get("files") or "")
+            return await self.set_files(
+                raw.get("selector") or "",
+                raw.get("paths") or raw.get("files") or "",
+            )
         if action == "download":
-            return await self.click_download(raw["selector"], raw.get("save_as", ""))
+            if raw.get("url"):
+                return await self.save_url(raw["url"], raw.get("save_as", ""))
+            return await self.click_download(raw.get("selector") or "", raw.get("save_as", ""))
         if action == "dialog":
             return await self.handle_dialog(raw.get("handle") or "accept", raw.get("prompt", ""))
         if action in ("extract_dom", "extract"):
@@ -1090,9 +1247,14 @@ class BrowserSession:
         if method == "dialog":
             return await self.handle_dialog(params.get("handle") or params.get("action") or "accept", params.get("prompt", ""))
         if method == "download":
-            return await self.click_download(params["selector"], params.get("save_as", ""))
+            if params.get("url"):
+                return await self.save_url(params["url"], params.get("save_as", ""))
+            return await self.click_download(params.get("selector") or "", params.get("save_as", ""))
         if method in ("set_files", "upload"):
-            return await self.set_files(params["selector"], params.get("paths") or params.get("files") or "")
+            return await self.set_files(
+                params.get("selector") or "",
+                params.get("paths") or params.get("files") or "",
+            )
         if method == "select":
             return await self.select_option(
                 params["selector"],
@@ -1253,8 +1415,9 @@ class BrowserSession:
         self._block_route_installed = False
         self._cdp_port = None
         self._chrome_pid = None
-        self.persist = False
+        self.persist = True
         self.attached = False
+        self.mode = "persist"
 
 
 from tools.registry import SessionRegistry
