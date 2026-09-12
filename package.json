@@ -1,6 +1,6 @@
 {
   "name": "browser-smoke",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "MCP Playwright browser for agents — daily tasks, scrape, and smoke tests",
   "keywords": [
     "opencode",

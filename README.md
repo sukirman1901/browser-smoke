@@ -178,7 +178,7 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 
 | Tool | When to use |
 |------|-------------|
-| `smoke_browser_snapshot(scope?)` | Default. `@ref` list; same-origin iframes tagged `iframe` |
+| `smoke_browser_snapshot(scope?)` | Default. Accessibility `@ref` list; cross-origin iframes tagged `iframe` |
 | `smoke_browser_execute(js_code)` | Scrape / inspect, return JSON |
 | `smoke_browser_extract_dom()` | Buttons/inputs/links without `@refs`. Prefer snapshot |
 | `smoke_browser_wait(state, selector?, url?, js?)` | Load, visible, URL glob, or `waitForFunction`. timeout is milliseconds |
@@ -246,7 +246,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.2**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.3**.
 
 ## License
 

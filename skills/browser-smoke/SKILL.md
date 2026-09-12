@@ -7,7 +7,7 @@ description: Use when controlling a browser from the agent — daily tasks (open
 
 Do **not** return images unless the user asks for a visual check.
 
-1. `browser_open` then **`browser_snapshot`** to see `@1`, `@2`, `@3`. That list is the selector map.
+1. `browser_open` then **`browser_snapshot`** to see `@1`, `@2`, `@3`. That list is the accessibility map (role + name).
 2. Click/type those `@n`. Do not invent CSS if a ref exists.
 3. After navigation, a new page, `code=expired_ref`, or if you are unsure which control to use: **snapshot again**. That is verification.
 4. Several steps → one `browser_script` (call `snapshot()` inside after nav) or one `browser_run`. Do not chain eight execute/DOM probes.
@@ -64,7 +64,7 @@ Named sessions: `session=` on **every** tool. `channel=chrome` is throwaway stoc
 | Tool | Use |
 |------|-----|
 | `browser_open` | Living Google Chrome (`chrome-attach`). Then snapshot. `persist=false` = Playwright testing Chromium. Returns `version`. |
-| `browser_snapshot` | **How you understand and verify the page.** `@n` for click/type. Default is the viewport. |
+| `browser_snapshot` | **How you understand and verify the page.** Accessibility roles as `@n`. Default is the viewport. |
 | `browser_script` | Default for 2+ steps. `snapshot()` / `click('@n')` / `type` / `wait` / `scroll` / `hover` / `execute` inside. |
 | `browser_run` | JSON batch, no loops. |
 | `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | `@n` from the last snapshot. Click does not silent-force. |

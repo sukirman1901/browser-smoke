@@ -21,6 +21,7 @@ from tools.payload import (
     classify_type_error,
     format_snapshot_lines,
     matches_url,
+    parse_aria_snapshot,
     safe_artifact_name,
     wrap_init_script,
 )
@@ -543,54 +544,21 @@ class BrowserSession:
             return err
         full = scope == "page"
         self._refs = {}
-        items: list[dict] = []
-        payload = await self.page.evaluate(SNAPSHOT_JS, {"full": full, "start": 1})
-        n = payload["next"]
-        for item in payload["items"]:
-            self._refs[str(item["ref"])] = {"sel": f'[data-bs-ref="{item["ref"]}"]', "frame": ""}
-            items.append(item)
-        count = await self.page.locator("iframe").count()
-        for i in range(count):
-            frame_loc = self.page.locator("iframe").nth(i)
-            src = (await frame_loc.get_attribute("src")) or ""
-            handle = await frame_loc.element_handle()
-            if handle is None:
-                continue
-            content = await handle.content_frame()
-            if content is None:
-                items.append({
-                    "ref": n,
-                    "role": "iframe",
-                    "name": "cross-origin",
-                    "href": src[:80],
-                    "iframe": True,
-                })
-                n += 1
-                continue
-            try:
-                payload = await content.evaluate(SNAPSHOT_JS, {"full": full, "start": n})
-            except Exception:
-                items.append({
-                    "ref": n,
-                    "role": "iframe",
-                    "name": "cross-origin",
-                    "href": src[:80],
-                    "iframe": True,
-                })
-                n += 1
-                continue
-            n = payload["next"]
-            frame_sel = f"iframe >> nth={i}"
-            for item in payload["items"]:
-                item["iframe"] = True
-                self._refs[str(item["ref"])] = {
-                    "sel": f'[data-bs-ref="{item["ref"]}"]',
-                    "frame": frame_sel,
-                }
-                items.append(item)
+        items = await self._snapshot_aria(full)
+        if items:
+            items = await self._supplement_aria(items)
+        else:
+            items = await self._snapshot_dom(full)
         shown, total = cap_snapshot_items(items)
-        kept = {str(item["ref"]) for item in shown}
-        self._refs = {k: v for k, v in self._refs.items() if k in kept}
+        self._refs = {}
+        for item in shown:
+            sel = item.get("sel")
+            if not sel:
+                continue
+            self._refs[str(item["ref"])] = {
+                "sel": sel,
+                "frame": item.get("frame") or "",
+            }
         out = {
             "status": "ok",
             "url": self.page.url,
@@ -601,6 +569,129 @@ class BrowserSession:
             out["truncated"] = True
             out["total"] = total
         return out
+
+    async def _snapshot_aria(self, full: bool) -> list[dict]:
+        loc = self.page.locator(":root")
+        try:
+            if full:
+                yaml_text = await loc.aria_snapshot(mode="ai", timeout=8000)
+                viewport = None
+            else:
+                yaml_text = await loc.aria_snapshot(mode="ai", boxes=True, timeout=8000)
+                viewport = await self.page.evaluate(
+                    "() => ({width: window.innerWidth, height: window.innerHeight})"
+                )
+        except TypeError:
+            return []
+        except Exception:
+            return []
+        if not yaml_text or "[ref=" not in yaml_text:
+            return []
+        items = parse_aria_snapshot(
+            yaml_text, start=1, viewport=None if full else viewport
+        )
+        if not full and viewport and not items:
+            items = parse_aria_snapshot(yaml_text, start=1, viewport=None)
+        return items
+
+    async def _supplement_aria(self, items: list[dict]) -> list[dict]:
+        n = max((int(i.get("ref") or 0) for i in items), default=0) + 1
+        try:
+            file_count = await self.page.locator('input[type="file"]').count()
+        except Exception:
+            file_count = 0
+        has_file = any(x.get("role") == "file" or x.get("type") == "file" for x in items)
+        if file_count and not has_file:
+            for i in range(file_count):
+                loc = self.page.locator('input[type="file"]').nth(i)
+                name = (
+                    (await loc.get_attribute("aria-label"))
+                    or (await loc.get_attribute("name"))
+                    or "file"
+                )
+                items.append(
+                    {
+                        "ref": n,
+                        "role": "file",
+                        "name": str(name)[:60],
+                        "hidden": True,
+                        "type": "file",
+                        "sel": f'input[type="file"] >> nth={i}',
+                    }
+                )
+                n += 1
+        try:
+            count = await self.page.locator("iframe").count()
+        except Exception:
+            count = 0
+        for i in range(count):
+            frame_loc = self.page.locator("iframe").nth(i)
+            src = (await frame_loc.get_attribute("src")) or ""
+            handle = await frame_loc.element_handle()
+            content = await handle.content_frame() if handle else None
+            if content is not None:
+                continue
+            items.append(
+                {
+                    "ref": n,
+                    "role": "iframe",
+                    "name": "cross-origin",
+                    "href": src[:80],
+                    "iframe": True,
+                }
+            )
+            n += 1
+        return items
+
+    async def _snapshot_dom(self, full: bool) -> list[dict]:
+        items: list[dict] = []
+        payload = await self.page.evaluate(SNAPSHOT_JS, {"full": full, "start": 1})
+        n = payload["next"]
+        for item in payload["items"]:
+            item["sel"] = f'[data-bs-ref="{item["ref"]}"]'
+            items.append(item)
+        count = await self.page.locator("iframe").count()
+        for i in range(count):
+            frame_loc = self.page.locator("iframe").nth(i)
+            src = (await frame_loc.get_attribute("src")) or ""
+            handle = await frame_loc.element_handle()
+            if handle is None:
+                continue
+            content = await handle.content_frame()
+            if content is None:
+                items.append(
+                    {
+                        "ref": n,
+                        "role": "iframe",
+                        "name": "cross-origin",
+                        "href": src[:80],
+                        "iframe": True,
+                    }
+                )
+                n += 1
+                continue
+            try:
+                payload = await content.evaluate(SNAPSHOT_JS, {"full": full, "start": n})
+            except Exception:
+                items.append(
+                    {
+                        "ref": n,
+                        "role": "iframe",
+                        "name": "cross-origin",
+                        "href": src[:80],
+                        "iframe": True,
+                    }
+                )
+                n += 1
+                continue
+            n = payload["next"]
+            frame_sel = f"iframe >> nth={i}"
+            for item in payload["items"]:
+                item["iframe"] = True
+                item["sel"] = f'[data-bs-ref="{item["ref"]}"]'
+                item["frame"] = frame_sel
+                items.append(item)
+        return items
 
     def _arm_dialog(self, dialog: str, prompt: str = "") -> dict | None:
         if not dialog:

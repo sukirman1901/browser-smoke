@@ -8,7 +8,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-SMOKE_VERSION = "1.4.2"
+SMOKE_VERSION = "1.4.3"
 
 # Snapshot interactive set. Keep this in sync with SNAPSHOT_JS in browser.py.
 SNAPSHOT_SELECTOR = (
@@ -27,6 +27,39 @@ LOG_TEXT_CHARS = 240
 LOG_MEM_CAP = 200
 MAX_SNAPSHOT_ITEMS = 80
 HREF_CHARS = 40
+
+# Roles the agent can click/type. Landmarks and static text stay out to keep tokens down.
+INTERACTIVE_ARIA_ROLES = frozenset(
+    {
+        "button",
+        "link",
+        "textbox",
+        "searchbox",
+        "combobox",
+        "listbox",
+        "option",
+        "checkbox",
+        "radio",
+        "switch",
+        "slider",
+        "spinbutton",
+        "tab",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "treeitem",
+        "dialog",
+        "alertdialog",
+    }
+)
+
+_ARIA_LINE = re.compile(
+    r'^\s*-\s+([A-Za-z0-9_-]+)(?:\s+"((?:\\.|[^"\\])*)")?'
+)
+_ARIA_REF = re.compile(r"\[ref=(e\d+)\]")
+_ARIA_BOX = re.compile(
+    r"\[box=([-+]?\d+(?:\.\d+)?),([-+]?\d+(?:\.\d+)?),([-+]?\d+(?:\.\d+)?),([-+]?\d+(?:\.\d+)?)\]"
+)
 
 
 def tool_error(message: str, *, code: str = "", hint: str = "") -> dict:
@@ -74,6 +107,56 @@ def classify_type_error(message: str) -> dict:
     if "readonly" in low or "disabled" in low:
         return tool_error(msg, hint="Target is not editable. Snapshot again.")
     return classify_target_error(msg)
+
+
+def _box_in_viewport(box: tuple[float, float, float, float], viewport: dict) -> bool:
+    x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return False
+    vw = float(viewport.get("width") or 0)
+    vh = float(viewport.get("height") or 0)
+    if vw <= 0 or vh <= 0:
+        return True
+    return y < vh and (y + h) > 0 and x < vw and (x + w) > 0
+
+
+def parse_aria_snapshot(
+    yaml_text: str,
+    *,
+    start: int = 1,
+    viewport: dict | None = None,
+) -> list[dict]:
+    """Turn Playwright aria_snapshot(mode='ai') YAML into Smoke @n items."""
+    items: list[dict] = []
+    n = start
+    for line in (yaml_text or "").splitlines():
+        ref_m = _ARIA_REF.search(line)
+        if not ref_m:
+            continue
+        role_m = _ARIA_LINE.match(line)
+        if not role_m:
+            continue
+        role = role_m.group(1).lower()
+        if role not in INTERACTIVE_ARIA_ROLES:
+            continue
+        if viewport:
+            box_m = _ARIA_BOX.search(line)
+            if box_m:
+                box = tuple(float(v) for v in box_m.groups())
+                if not _box_in_viewport(box, viewport):
+                    continue
+        name = (role_m.group(2) or "").replace('\\"', '"')
+        items.append(
+            {
+                "ref": n,
+                "role": role,
+                "name": name[:60],
+                "aria_ref": ref_m.group(1),
+                "sel": f"aria-ref={ref_m.group(1)}",
+            }
+        )
+        n += 1
+    return items
 
 
 def dumps(obj: Any) -> str:

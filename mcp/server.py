@@ -56,7 +56,7 @@ async def browser_open(
 
 @mcp.tool()
 async def browser_snapshot(scope: str = "viewport", session: str = "") -> str:
-    """Compact @refs for the current page. Call this to see what to click, and again to verify after navigation."""
+    """Compact @refs from the accessibility tree. Call this to see what to click, and again to verify after navigation."""
     async with locked_session(session) as sess:
         return dumps(await sess.snapshot(scope))
 

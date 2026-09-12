@@ -164,7 +164,40 @@ class PayloadTests(unittest.TestCase):
 
     def test_version_constant(self):
         from tools.payload import SMOKE_VERSION
-        self.assertEqual(SMOKE_VERSION, "1.4.2")
+        self.assertEqual(SMOKE_VERSION, "1.4.3")
+
+    def test_parse_aria_keeps_interactive_refs(self):
+        from tools.payload import parse_aria_snapshot
+        yaml_text = """
+- banner:
+  - heading "Example Domain" [level=1] [ref=e1]
+  - link "More information" [ref=e2]:
+    - /url: https://example.com
+- main:
+  - textbox "Email" [ref=e3]
+  - button "Publish" [ref=e4]
+  - paragraph: Static copy [ref=e5]
+"""
+        items = parse_aria_snapshot(yaml_text)
+        self.assertEqual([i["role"] for i in items], ["link", "textbox", "button"])
+        self.assertEqual([i["ref"] for i in items], [1, 2, 3])
+        self.assertEqual(items[0]["sel"], "aria-ref=e2")
+        self.assertEqual(items[2]["name"], "Publish")
+
+    def test_parse_aria_viewport_drops_offscreen(self):
+        from tools.payload import parse_aria_snapshot
+        yaml_text = """
+- button "Visible" [ref=e1] [box=10,10,80,24]
+- button "Below" [ref=e2] [box=10,900,80,24]
+"""
+        items = parse_aria_snapshot(yaml_text, viewport={"width": 1280, "height": 720})
+        self.assertEqual([i["name"] for i in items], ["Visible"])
+
+    def test_parse_aria_textbox_ref(self):
+        from tools.payload import parse_aria_snapshot
+        items = parse_aria_snapshot('- textbox "Post body" [ref=e9]\n')
+        self.assertEqual(items[0]["aria_ref"], "e9")
+        self.assertEqual(items[0]["role"], "textbox")
 
 
 class DomExtractorTests(unittest.TestCase):
