@@ -10,6 +10,7 @@ const PKG_DIR = join(__dirname, "..");
 const CWD = process.cwd();
 const HOME = process.env.HOME || process.env.USERPROFILE || "/root";
 const OCODE_GLOBAL_DIR = join(HOME, ".config", "opencode");
+const HOSTS = ["opencode", "cursor", "claude"];
 
 function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -19,6 +20,16 @@ function ask(question) {
 function sh(cmd, opts = {}) {
   console.log(`> ${cmd}`);
   return execSync(cmd, { stdio: "inherit", ...opts });
+}
+
+function readJson(path) {
+  if (!existsSync(path)) return {};
+  try { return JSON.parse(readFileSync(path, "utf-8")); } catch { return {}; }
+}
+
+function writeJson(path, obj) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(obj, null, 2) + "\n");
 }
 
 function getPythonCmd() {
@@ -37,34 +48,70 @@ function getPythonCmd() {
   process.exit(1);
 }
 
-function getOrCreateConfig(scope) {
+function stdMcpEntry(venvDir, mcpDir) {
+  return {
+    command: join(venvDir, "bin", "python3"),
+    args: ["-m", "server"],
+    cwd: mcpDir,
+  };
+}
+
+function installSkill(dir) {
+  const skillsDir = join(dir, "skills", "browser-smoke");
+  mkdirSync(skillsDir, { recursive: true });
+  const skillSrc = join(PKG_DIR, "skills", "browser-smoke", "SKILL.md");
+  if (existsSync(skillSrc)) {
+    writeFileSync(join(skillsDir, "SKILL.md"), readFileSync(skillSrc, "utf-8"));
+  }
+}
+
+function writeOpenCode(scope, venvDir, mcpDir) {
   const isGlobal = scope === "global";
   const configDir = isGlobal ? OCODE_GLOBAL_DIR : CWD;
   const configPath = join(configDir, "opencode.json");
-
-  let config = {};
-  if (existsSync(configPath)) {
-    try { config = JSON.parse(readFileSync(configPath, "utf-8")); } catch { config = {}; }
-  }
-  return { config, configPath, configDir };
-}
-
-function addMcpToConfig(config, venvDir, mcpDir) {
+  const config = readJson(configPath);
   if (!config.mcp) config.mcp = {};
   config.mcp["browser-smoke"] = {
     type: "local",
     command: [join(venvDir, "bin", "python3"), "-m", "server"],
     cwd: mcpDir,
   };
+  writeJson(configPath, config);
+  installSkill(configDir);
+  console.log(`   ✅ OpenCode: ${configPath}`);
 }
 
-function installSkill(configDir) {
-  const skillsDir = join(configDir, "skills", "browser-smoke");
-  mkdirSync(skillsDir, { recursive: true });
-  const skillSrc = join(PKG_DIR, "skills", "browser-smoke", "SKILL.md");
-  if (existsSync(skillSrc)) {
-    writeFileSync(join(skillsDir, "SKILL.md"), readFileSync(skillSrc, "utf-8"));
-  }
+function writeCursor(scope, venvDir, mcpDir) {
+  const isGlobal = scope === "global";
+  const configPath = isGlobal
+    ? join(HOME, ".cursor", "mcp.json")
+    : join(CWD, ".cursor", "mcp.json");
+  const config = readJson(configPath);
+  if (!config.mcpServers) config.mcpServers = {};
+  config.mcpServers["browser-smoke"] = stdMcpEntry(venvDir, mcpDir);
+  writeJson(configPath, config);
+  installSkill(isGlobal ? join(HOME, ".cursor") : join(CWD, ".cursor"));
+  console.log(`   ✅ Cursor: ${configPath}`);
+}
+
+function writeClaude(scope, venvDir, mcpDir) {
+  const isGlobal = scope === "global";
+  const configPath = isGlobal
+    ? join(HOME, ".claude.json")
+    : join(CWD, ".mcp.json");
+  const config = readJson(configPath);
+  if (!config.mcpServers) config.mcpServers = {};
+  config.mcpServers["browser-smoke"] = stdMcpEntry(venvDir, mcpDir);
+  writeJson(configPath, config);
+  installSkill(isGlobal ? join(HOME, ".claude") : join(CWD, ".claude"));
+  console.log(`   ✅ Claude Code: ${configPath}`);
+}
+
+function parseHosts(args) {
+  const selected = HOSTS.filter((h) => args.includes(`--${h}`));
+  if (args.includes("--all")) return [...HOSTS];
+  if (selected.length) return selected;
+  return null;
 }
 
 async function main() {
@@ -75,20 +122,18 @@ async function main() {
   console.log(`
 ╔══════════════════════════════════════╗
 ║   Browser Smoke MCP - Setup         ║
-║   OpenCode browser testing plugin   ║
 ╚══════════════════════════════════════╝
 `);
 
   const python = getPythonCmd();
 
-  // --- Ask scope ---
   let scope = flagScope;
   if (!scope && !isPrint) {
     const answer = await ask(`
 Pilih lokasi instalasi:
 
-  [1] Global  — untuk semua project (~/.config/opencode)
-  [2] Local   — hanya project ini (./opencode.json)
+  [1] Global
+  [2] Local (project ini)
   [3] Cancel
 
 Pilih [1/2/3]: `);
@@ -101,59 +146,61 @@ Pilih [1/2/3]: `);
     scope = "local";
   }
 
+  let hosts = parseHosts(args);
+  if (!hosts && !isPrint) {
+    const answer = await ask(`
+Pilih host MCP:
+
+  [1] OpenCode
+  [2] Cursor
+  [3] Claude Code
+  [4] All
+
+Pilih [1/2/3/4]: `);
+    if (answer === "2") hosts = ["cursor"];
+    else if (answer === "3") hosts = ["claude"];
+    else if (answer === "4") hosts = [...HOSTS];
+    else hosts = ["opencode"];
+  } else if (!hosts) {
+    hosts = ["opencode"];
+  }
+
   const isGlobal = scope === "global";
   const targetDir = isGlobal ? join(OCODE_GLOBAL_DIR, ".browser-smoke") : join(CWD, ".browser-smoke");
   const mcpDir = join(targetDir, "mcp");
   const venvDir = join(targetDir, ".venv");
 
-  console.log(`\n📍 Instalasi: ${isGlobal ? "Global (~/.config/opencode)" : "Local (./)"}`);
+  console.log(`\n📍 ${isGlobal ? "Global" : "Local"} · hosts: ${hosts.join(", ")}`);
 
   if (isPrint) {
-    const { config } = getOrCreateConfig(scope);
-    addMcpToConfig(config, venvDir, mcpDir);
-    console.log(JSON.stringify(config.mcp["browser-smoke"], null, 2));
+    console.log(JSON.stringify(stdMcpEntry(venvDir, mcpDir), null, 2));
     process.exit(0);
   }
 
-  // --- Install ---
-  if (!existsSync(mcpDir)) {
-    console.log("\n📦 Copying MCP server files...");
-    mkdirSync(targetDir, { recursive: true });
-    cpSync(join(PKG_DIR, "mcp"), mcpDir, { recursive: true });
-  } else {
-    console.log("\n✅ MCP server already installed. Skipping.");
-  }
+  console.log("\n📦 Syncing MCP server files...");
+  mkdirSync(targetDir, { recursive: true });
+  cpSync(join(PKG_DIR, "mcp"), mcpDir, { recursive: true });
 
   if (!existsSync(join(venvDir, "bin", "python3"))) {
     console.log("\n📦 Creating Python virtual environment...");
     sh(`${python} -m venv "${venvDir}"`);
-
     console.log("\n📦 Installing Python dependencies...");
     sh(`"${join(venvDir, "bin", "pip")}" install -r "${join(mcpDir, "requirements.txt")}"`);
-
     console.log("\n📦 Installing Playwright browser (Chromium)...");
     sh(`"${join(venvDir, "bin", "playwright")}" install chromium`);
   } else {
     console.log("\n✅ Virtual environment already exists. Skipping.");
   }
 
-  // --- Config ---
-  console.log("\n📝 Configuring OpenCode...");
-  const { config, configPath, configDir } = getOrCreateConfig(scope);
-  addMcpToConfig(config, venvDir, mcpDir);
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log(`   ✅ Config written to: ${configPath}`);
-
-  // --- Skill ---
-  installSkill(configDir);
-  console.log("   ✅ Skill file installed");
+  console.log("\n📝 Writing MCP config...");
+  if (hosts.includes("opencode")) writeOpenCode(scope, venvDir, mcpDir);
+  if (hosts.includes("cursor")) writeCursor(scope, venvDir, mcpDir);
+  if (hosts.includes("claude")) writeClaude(scope, venvDir, mcpDir);
 
   console.log(`
 ╔══════════════════════════════════════╗
-║   ✅ Setup complete!                 ║
-║                                      ║
-║   Restart OpenCode to use:           ║
-║     browser-smoke skill + tools      ║
+║   ✅ Setup complete                  ║
+║   Restart the MCP host(s)            ║
 ╚══════════════════════════════════════╝
 `);
 }

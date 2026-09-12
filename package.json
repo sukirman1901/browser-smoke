@@ -1,7 +1,7 @@
 {
   "name": "browser-smoke",
-  "version": "1.0.4",
-  "description": "MCP browser smoke testing plugin for OpenCode — Playwright-based UI testing via browser automation",
+  "version": "1.2.0",
+  "description": "MCP browser plugin for smoke tests and light scraping — compact Playwright tools",
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -24,7 +24,9 @@
     "bin/",
     "mcp/",
     "skills/",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"

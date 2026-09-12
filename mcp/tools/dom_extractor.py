@@ -1,8 +1,8 @@
 def classify_inputs(elements: list[dict]) -> dict:
     """Classify DOM elements into categories for smoke testing."""
-    buttons = [e for e in elements if e["tag"] == "button" and e["visible"] and e["enabled"]]
-    inputs = [e for e in elements if e["tag"] == "input" and e["visible"]]
-    links = [e for e in elements if e["tag"] == "a" and e["visible"]]
+    buttons = [e for e in elements if e.get("tag") == "button" and e.get("visible", True) and e.get("enabled", True)]
+    inputs = [e for e in elements if e.get("tag") == "input" and e.get("visible", True)]
+    links = [e for e in elements if e.get("tag") == "a" and e.get("visible", True)]
     others = [e for e in elements if e not in buttons + inputs + links]
     return {
         "buttons": buttons,

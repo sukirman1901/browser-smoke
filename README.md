@@ -1,202 +1,164 @@
 # Browser Smoke
 
-MCP browser smoke testing plugin for [OpenCode](https://opencode.ai) — Playwright-based UI testing via browser automation. Jalankan smoke test terhadap web app langsung dari OpenCode dengan 24 tools.
+MCP browser plugin for smoke tests and light page scraping via Playwright. Compact JSON, screenshots off by default.
+
+Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
+
+See [CHANGELOG.md](CHANGELOG.md) for v1.1 token defaults and v1.2 host/file/dialog tools.
 
 ## Prerequisites
 
 | Requirement | Version |
 |-------------|---------|
 | Node.js | >= 18 |
-| Python | >= 3.8 |
-| OpenCode | terinstal |
+| Python | >= 3.10 |
+| Playwright Chromium | installed by `init` |
 
-## Quick Install
+## Token defaults (v1.2)
+
+Tool results are compact JSON. Clicks, types, and `open` **do not** attach PNG. Screenshot files go to `artifacts/shots/` only when you ask.
+
+| Do | Don't |
+|----|--------|
+| `browser_snapshot` then click `@1` | `extract_dom` + screenshot on every click |
+| `browser_run` for a flow | 8 separate MCP calls |
+| `browser_execute` returning JSON | dump `innerHTML` or base64 images |
+
+`npx browser-smoke init` always refreshes the MCP server files so this upgrade lands.
+
+## Quick install
 
 ```bash
 npx browser-smoke init
 ```
 
-CLI akan interaktif nanya:
-
-```
-Pilih lokasi instalasi:
-  [1] Global  — untuk semua project (~/.config/opencode)
-  [2] Local   — hanya project ini (./opencode.json)
-  [3] Cancel
-Pilih [1/2/3]:
-```
-
-Proses:
-1. Setup Python virtual environment
-2. Install dependencies (`fastmcp`, `playwright`, `pixelmatch`, `Pillow`)
-3. Install Chromium browser
-4. Config `opencode.json` + skill file
-
-Restart OpenCode setelah selesai.
-
-### Opsi Init
+Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 
 | Command | Description |
 |---------|-------------|
-| `npx browser-smoke init` | Interaktif (tanya global/local) |
-| `npx browser-smoke init --global` | Global, skip prompt |
-| `npx browser-smoke init --local` | Local, skip prompt |
-| `npx browser-smoke init --print` | Preview config tanpa install |
+| `npx browser-smoke init` | Interactive |
+| `npx browser-smoke init --local --all` | Project OpenCode + Cursor + Claude |
+| `npx browser-smoke init --local --cursor` | Cursor `.cursor/mcp.json` only |
+| `npx browser-smoke init --local --claude` | Claude Code `.mcp.json` only |
+| `npx browser-smoke init --global --opencode` | OpenCode user config |
+| `npx browser-smoke init --print` | Preview stdio MCP entry |
 
-### Manual Config
+`init` always refreshes MCP server files. Restart the host after install.
 
-Kalo `init` gak bisa dipake, tambahin manual ke `opencode.json`:
+## Tools
 
-```json
-{
-  "mcp": {
-    "browser-smoke": {
-      "type": "local",
-      "command": [".browser-smoke/.venv/bin/python3", "-m", "server"],
-      "cwd": ".browser-smoke/mcp"
-    }
-  }
-}
-```
-
-## Tools (24 MCP Tools)
-
-### Navigasi & Page
+### Cheap observation
 
 | Tool | Description |
 |------|-------------|
-| `browser_open(url, headless?)` | Buka URL. Returns title + status code + screenshot |
-| `browser_open_tab(url)` | Buka tab baru, fokus ke tab baru |
-| `browser_get_tabs()` | List semua tab (title, URL, active status) |
-| `browser_close()` | Tutup browser session |
-| `browser_scroll(x?, y?)` | Scroll page (default: down 200px) |
+| `browser_snapshot(scope?)` | Accessibility-ish `@ref` list. Prefer this. |
+| `browser_extract_dom()` | Compact buttons/inputs/links (no bounding boxes) |
+| `browser_execute(js_code)` | Page JS → JSON (scrape) |
+| `browser_wait(state, selector?, url?)` | load / visible / URL |
 
-### Interaksi DOM
-
-| Tool | Description |
-|------|-------------|
-| `browser_extract_dom()` | List semua elemen interaktif (button, input, link) + CSS selector |
-| `browser_click(selector)` | Klik element berdasarkan CSS selector |
-| `browser_type(selector, text)` | Ketik teks ke input |
-| `browser_type_guess(selector, input_type?)` | Auto-fill input (text/email/password/search/number) |
-
-### Screenshot & Visual
+### Navigation & batch
 
 | Tool | Description |
 |------|-------------|
-| `browser_screenshot()` | Screenshot halaman saat ini |
-| `browser_screenshot_diff(name, threshold?)` | Screenshot + diff dengan baseline. Threshold default 0.01 (1%) |
-| `browser_highlight(selector, color?, duration?)` | Highlight element dengan outline |
+| `browser_open(url, headless?, wait_until?, channel?, user_data_dir?)` | Bundled Chromium. Persistent profile via `user_data_dir` |
+| `browser_run(actions_json)` | Many actions, one call |
+| `browser_open_tab` / `browser_get_tabs` / `browser_close` | Tabs |
+| `browser_scroll(x?, y?)` | `scrollBy` (default down 200px) |
+| `browser_reload` / `browser_hover` / `browser_press` | Reload, menus, keys |
 
-### JavaScript & Network
-
-| Tool | Description |
-|------|-------------|
-| `browser_execute(js_code)` | Execute JavaScript di page context |
-| `browser_inject_script(script, url_pattern?)` | Inject JS sebelum page load (mock API, polyfills) |
-| `browser_network_capture(mode, patterns?)` | Intercept network requests (mode: start/stop/get) |
-| `browser_block_resources(patterns)` | Block resources by glob pattern (*.jpg, *.png, analytics) |
-
-### Console & Error
+### Interaction
 
 | Tool | Description |
 |------|-------------|
-| `browser_console()` | Ambil captured console logs |
-| `browser_errors()` | Ambil captured JS runtime errors |
+| `browser_click(selector)` | CSS or `@1` (iframe refs work) |
+| `browser_type(selector, text)` | Fill |
+| `browser_type_guess(selector, input_type?)` | Dummy email/password/… |
+| `browser_select_option(selector, value?, label?, index?)` | `<select>` |
+| `browser_set_files(selector, paths)` | File input, comma-separated abs paths |
+| `browser_download(selector, save_as?)` | Click + save to `artifacts/downloads/` |
+| `browser_handle_dialog(action, prompt?)` | `accept`/`dismiss` before the triggering click |
 
-### Cookies & Storage
+Pass `screenshot=true` on these only when you need a file path. `screenshot_base64=true` is an escape hatch.
 
-| Tool | Description |
-|------|-------------|
-| `browser_get_cookies()` | Get all cookies |
-| `browser_set_cookie(name, value, domain?, path?)` | Set cookie |
-| `browser_clear_cookies()` | Clear all cookies |
-| `browser_storage(mode, storage?, key?, value?)` | localStorage/sessionStorage access (all/get/set/clear) |
-
-### Report
+### Visual (on demand)
 
 | Tool | Description |
 |------|-------------|
-| `browser_report(results_json)` | Generate smoke test report markdown |
+| `browser_screenshot()` | Writes `artifacts/shots/NNNN.png`, returns path |
+| `browser_screenshot_diff(name, threshold?)` | Baseline/diff on disk |
+| `browser_highlight(selector)` | Outline for debugging |
 
-### Background
+### Network, console, state
 
 | Tool | Description |
 |------|-------------|
-| `browser_offscreen(action, url?, js?)` | Hidden page untuk background processing (open/exec/close) |
+| `browser_console` / `browser_errors` | Capped, truncated |
+| `browser_network_capture(mode, patterns?, headers?)` | start/stop/get |
+| `browser_block_resources` / `browser_inject_script` | Block / mock |
+| `browser_get_cookies(include_values?)` / `set` / `clear` | Cookies |
+| `browser_storage(...)` | local/session storage |
+| `browser_report(results_json)` | Writes markdown; does not echo it |
+| `browser_offscreen(action, url?, js?)` | Hidden page |
 
-## Usage Guide
+## Usage
 
-### Basic Smoke Test
-
-1. Load skill `browser-smoke` di OpenCode
-2. Test flow:
+Smoke flow:
 
 ```
 browser_open(url="http://localhost:5173")
-browser_extract_dom()
-browser_click(selector="button:has-text('Login')")
-browser_type(selector="input[type='email']", text="test@test.com")
-browser_type(selector="input[type='password']", text="Test1234!")
-browser_click(selector="button:has-text('Submit')")
-browser_screenshot()
+browser_snapshot()
+browser_run(actions_json='[{"action":"type","selector":"@1","text":"test@test.com"},{"action":"click","selector":"@3"}]')
 browser_console()
 browser_errors()
 browser_report(results_json)
 browser_close()
 ```
 
-### Network Capture
-
-```python
-browser_network_capture(mode="start", patterns="*.api.*,*.json")
-# lakukan interaksi...
-browser_network_capture(mode="get")  # lihat request/response
-browser_network_capture(mode="stop")
-```
-
-### Script Injection
-
-```python
-browser_inject_script(script="window.__TEST_MODE__=true")
-browser_open(url="http://localhost:5173")
-browser_execute(js_code="window.__TEST_MODE__")  # → true
-```
-
-### Visual Regression
-
-```python
-browser_open(url="http://localhost:5173")
-browser_screenshot_diff(name="homepage")  # baseline (first run)
-# setelah code change...
-browser_screenshot_diff(name="homepage")  # diff with baseline
-```
-
-## Skill Integration
-
-Setelah install, skill `browser-smoke` otomatis terdaftar. Di OpenCode:
+Scrape:
 
 ```
-skill browser-smoke
+browser_open(url="https://example.com")
+browser_execute(js_code="() => [...document.querySelectorAll('h1,h2,a')].slice(0,40).map(el => ({t:el.tagName, x:el.textContent.trim(), h:el.href||null}))")
+browser_close()
 ```
 
-Skill ini menyediakan metodologi smoke testing lengkap dengan failure analysis loop.
+Visual regression:
+
+```
+browser_screenshot_diff(name="homepage")
+```
+
+Persistent login (Playwright profile, not your daily Chrome):
+
+```
+browser_open(url="https://app.example.com", user_data_dir=".browser-smoke/profile")
+```
+
+Upload / download / dialog:
+
+```
+browser_handle_dialog(action="accept")
+browser_set_files(selector="@7", paths="/abs/path/cv.pdf")
+browser_download(selector="@8")
+```
 
 ## Troubleshooting
 
 | Masalah | Solusi |
 |---------|--------|
-| `browser_screenshot_diff` gagal | Pastikan `mcp/tools/browser.py` punya akses ke artifacts directory |
-| Chromium error | `playwright install chromium` lagi |
-| Connection refused | Pastikan app target jalan (`npm run dev`, dll) |
-| Python not found | `python3 --version`, kalo error install Python dulu |
+| Chromium error | `npx browser-smoke init` lagi, atau `.browser-smoke/.venv/bin/playwright install chromium` |
+| Need real Chrome | `browser_open(..., channel="chrome")` |
+| Connection refused | Target app harus jalan |
+| Python not found | Python 3.10+ |
+| Old tools / screenshots on every click | `init` ulang — sync MCP files |
 
 ## Development
 
 ```bash
 git clone https://github.com/sukirman1901/browser-smoke.git
 cd browser-smoke
-npm link           # biar bisa npx browser-smoke dari lokal
+python3 -m unittest discover -s tests -v
+npm link
 ```
 
 ## License

@@ -1,147 +1,65 @@
 ---
 name: browser-smoke
-description: Use when testing UI after feature development — before commit, before PR, or after code changes that affect the frontend
+description: Use when testing UI after feature work, before commit/PR, scraping a page, or filling a form that needs upload/download/dialogs. Prefer compact tools; never request screenshots unless a visual bug needs evidence.
 ---
 
-## Browser Smoke Test Methodology
+## Token rules (mandatory)
 
-### Setup
+Do **not** return images unless the user asks for a visual check.
 
-Sebelum mulai, pastikan test app jalan (e.g. `npm run dev`, `localhost:5173`).
+1. `browser_open` then `browser_snapshot` (or `browser_execute` for scrape).
+2. Click/type with `@n` from the last snapshot. Refs tagged `iframe` still use `@n`.
+3. Multi-step: one `browser_run`, not a chain of MCP tools.
+4. Screenshot only for visual bugs. Never `screenshot_base64`.
+5. Scrape: `browser_execute` returning a small JSON array. No `innerHTML`.
 
-Gunakan `todowrite` untuk track tiap skenario test.
-
-### Core Loop
-
-**Setiap failure = blocking. Jangan lanjut sebelum fix.**
-
-1. **Buka URL** → `browser_open(url)`
-2. **Ekstrak DOM** → `browser_extract_dom()` — lihat semua element interaktif + selector
-3. **Test interaksi** — klik, type, scroll, inject script, capture network
-4. **Verify hasil** — tiap step: pass atau fail? Catat hasilnya.
-5. **Kalau fail** → analisa penyebab:
-   - Debug: `browser_network_capture(mode="get")` — cek network request/response
-   - Debug: `browser_console()` — cek console errors
-   - Debug: `browser_errors()` — cek JS runtime errors
-   - Debug: `browser_screenshot_diff(name)` — visual regression check
-   - Debug: `browser_highlight(selector)` — highlight element
-   - Cari fix di codebase → edit → retest step yang sama
-6. **Retest** — ulangi step yang fail sampai pass
-7. **Kalau semua pass** → lanjut ke skenario berikutnya
-8. **Generate report** → `browser_report(results_json)`
-
-### Tools (Playwright MCP)
-
-| Tool | Fungsi |
-|------|--------|
-| `browser_open(url, headless)` | Buka halaman, balikin title + status code + screenshot |
-| `browser_extract_dom()` | List element interaktif (button, input, link) + selector |
-| `browser_click(selector)` | Klik element, balikin screenshot |
-| `browser_type(selector, text)` | Ketik teks ke input |
-| `browser_type_guess(selector, type)` | Auto-fill (email/password/text) |
-| `browser_screenshot()` | Screenshot halaman |
-| `browser_screenshot_diff(name, threshold)` | Screenshot + diff dengan baseline (visual regression) |
-| `browser_scroll(x, y)` | Scroll halaman |
-| `browser_highlight(selector, color)` | Highlight element dengan outline (visual debugging) |
-| `browser_execute(js_code)` | Execute JavaScript, balikin result |
-| `browser_inject_script(script, url_pattern)` | Inject JS sebelum page load (mock API, test helpers) |
-| `browser_offscreen(action, url, js)` | Hidden page untuk background processing |
-| `browser_open_tab(url)` | Buka tab baru, fokus ke tab baru |
-| `browser_get_tabs()` | List semua tab + title + URL + active status |
-| `browser_console()` | Ambil console log yang tertangkap |
-| `browser_errors()` | Ambil JS runtime errors yang tertangkap |
-| `browser_network_capture(mode, patterns)` | Capture network requests/responses (start/stop/get) |
-| `browser_block_resources(patterns)` | Block resources (images, analytics, etc) via glob |
-| `browser_get_cookies()` / `browser_set_cookie()` / `browser_clear_cookies()` | Cookie management |
-| `browser_storage(mode, storage, key, value)` | localStorage/sessionStorage access (all/get/set/clear) |
-| `browser_report(results_json)` | Generate report markdown ke `artifacts/smoke-report.md` |
-| `browser_close()` | Tutup browser session |
-
-### Advanced Workflows
-
-#### Network Monitoring
-
-Capture network activity selama test untuk debug request/response:
-
-1. Start: `browser_network_capture(mode="start", patterns="*.api.*,*.json")`
-2. Lakukan interaksi (click, type, submit)
-3. Get hasil: `browser_network_capture(mode="get")` — lihat status code, headers, body size
-4. Stop: `browser_network_capture(mode="stop")`
-5. Correlation: cocokkan network error dengan console error untuk diagnosis cepat
-
-#### Script Injection
-
-Inject JavaScript sebelum halaman dimuat untuk mocking atau test helpers:
-
-1. Inject: `browser_inject_script(script="window.__TEST__ = true;")`
-2. Buka URL: `browser_open(url)` — script jalan sebelum page load
-3. Verify: `browser_execute(js_code="window.__TEST__")`
-
-Berguna untuk: mock API response, inject polyfill, set test flags, bypass gate.
-
-#### State Management (Cookies + Storage)
-
-Setup state sebelum test atau verify state setelah test:
-
-1. Set cookie: `browser_set_cookie(name="session", value="token123", domain=".example.com")`
-2. Set localStorage: `browser_storage(mode="set", storage="local", key="theme", value="dark")`
-3. Buka URL: state sudah siap
-4. Verify: `browser_get_cookies()` / `browser_storage(mode="all", storage="local")`
-
-#### Visual Regression
-
-Deteksi perubahan visual yang tidak diinginkan:
-
-1. Baseline: `browser_screenshot_diff(name="homepage")` — creates baseline on first run
-2. After code change: jalankan lagi → compare dengan baseline
-3. Output: `diff_pixels` count + `diff_screenshot` (base64 image of highlighted differences)
-4. Threshold bisa diatur: `browser_screenshot_diff(name="homepage", threshold=0.05)`
-
-#### Background Processing
-
-Gunakan offscreen page untuk task paralel (network capture, API polling):
-
-1. Open: `browser_offscreen(action="open", url="http://localhost:5173")`
-2. Exec: `browser_offscreen(action="exec", js="fetch('/api/data').then(r=>r.json())")`
-3. Close: `browser_offscreen(action="close")`
-
-### Failure Analysis Loop
+## Core loop
 
 ```
-Step fail?
-  → browser_network_capture(mode="get") untuk cek network error
-  → browser_console() untuk cek console error
-  → browser_errors() untuk cek runtime error
-  → browser_screenshot_diff(name) untuk cek visual regression
-  → browser_highlight(selector) untuk visual debugging
-  → browser_execute() untuk inspect element state
-  → Cari source code → edit → fix
-  → Retest step yang sama
-  → Kalau masih fail, repeat analisa
+browser_open url=...
+browser_snapshot
+browser_run actions_json=[{"action":"type","selector":"@1","text":"..."},{"action":"click","selector":"@2"}]
+browser_console
+browser_errors
+browser_report results_json=...
+browser_close
 ```
 
-### Comprehensive Smoke Test (All Features)
+Failures block. Debug with console, errors, network_capture `mode=get` (no headers), then `browser_execute`. Screenshot last.
 
-Test scenario lengkap yang menggunakan semua capabilities baru:
+Logged-in smoke (Playwright profile, not Chrome's daily profile):
+
+`browser_open url=... user_data_dir=".browser-smoke/profile"`
+
+## Tools
+
+| Tool | Use |
+|------|-----|
+| `browser_open(url, headless?, user_data_dir?, channel?)` | Navigate. Persistent profile optional. |
+| `browser_snapshot(scope?)` | `@ref` list, same-origin iframes tagged `iframe`. |
+| `browser_run(actions_json)` | Batch including press, select, upload, download, dialog, reload. |
+| `browser_click` / `type` / `type_guess` / `hover` / `press` | Selector or `@n`. |
+| `browser_select_option` / `browser_set_files` / `browser_download` | Forms and files. |
+| `browser_handle_dialog(action, prompt?)` | Call **before** the click that opens alert/confirm/prompt. |
+| `browser_wait` / `browser_reload` / `browser_scroll` | Timing and motion. |
+| `browser_execute` | Scrape / inspect JSON. |
+| `browser_screenshot` / `screenshot_diff` / `highlight` | Visual, on demand. |
+| `browser_console` / `errors` / `network_capture` / cookies / storage | Evidence. |
+| `browser_report` / `close` / tabs / offscreen | Wrap-up. |
+
+## Files and dialogs
 
 ```
-1. browser_network_capture(mode="start")
-2. browser_block_resources(patterns="*.jpg,*.png,analytics")
-3. browser_inject_script(script="window.__TEST_MODE__=true")
-4. browser_open(url="http://localhost:5173")
-5. browser_screenshot_diff(name="initial-load")
-6. browser_extract_dom()
-7. browser_click(selector="button ...")
-8. browser_console()
-9. browser_errors()
-10. browser_network_capture(mode="get")
-11. browser_get_cookies()
-12. browser_storage(mode="all", storage="local")
-13. browser_report(results_json)
-14. browser_close()
+browser_handle_dialog action=accept
+browser_click selector=@4
+browser_set_files selector=@7 paths="/abs/path/cv.pdf"
+browser_download selector=@8
 ```
 
-### Output
+## Scrape
 
-Laporan: `artifacts/smoke-report.md`
-Format: tiap step + status ✅/❌ + screenshot + summary pass/fail.
+```
+browser_open url="https://example.com"
+browser_execute js_code="() => [...document.querySelectorAll('a')].slice(0,50).map(a => ({t:a.textContent.trim(), h:a.href}))"
+browser_close
+```
