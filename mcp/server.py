@@ -64,10 +64,20 @@ async def browser_click(
     selector: str,
     screenshot: bool = False,
     screenshot_base64: bool = False,
+    dialog: str = "",
+    prompt: str = "",
+    popup: bool = False,
 ) -> str:
-    """Click a CSS selector or snapshot ref like @1. No screenshot unless requested."""
+    """Click CSS or @1. dialog=accept|dismiss handles the JS alert on this click. popup=true waits for window.open and focuses it."""
     session = await get_session()
-    result = await session.click(selector, screenshot=screenshot, screenshot_base64=screenshot_base64)
+    result = await session.click(
+        selector,
+        screenshot=screenshot,
+        screenshot_base64=screenshot_base64,
+        dialog=dialog,
+        prompt=prompt,
+        popup=popup,
+    )
     return dumps(result)
 
 
@@ -138,7 +148,7 @@ async def browser_scroll(
 
 @mcp.tool()
 async def browser_handle_dialog(action: str = "accept", prompt: str = "") -> str:
-    """Set how the *next* JS dialog is handled (one-shot, then back to dismiss). Call before the click that opens it."""
+    """Set how the *next* JS dialog is handled (one-shot). Prefer browser_click(..., dialog='accept') when the click opens it."""
     session = await get_session()
     return dumps(await session.handle_dialog(action, prompt))
 
@@ -167,6 +177,20 @@ async def browser_select_option(
 
 
 @mcp.tool()
+async def browser_drag(source: str, target: str) -> str:
+    """Drag source onto target. CSS or @n."""
+    session = await get_session()
+    return dumps(await session.drag(source, target))
+
+
+@mcp.tool()
+async def browser_paste(selector: str, text: str) -> str:
+    """Insert text in one chunk (contenteditable / paste-like). Use type to replace an input value."""
+    session = await get_session()
+    return dumps(await session.paste(selector, text))
+
+
+@mcp.tool()
 async def browser_press(selector: str, key: str) -> str:
     """Press a key on an element (Enter, Tab, Control+s, ...)."""
     session = await get_session()
@@ -192,11 +216,12 @@ async def browser_wait(
     state: str = "load",
     selector: str = "",
     url: str = "",
+    js: str = "",
     timeout: int = 10000,
 ) -> str:
-    """Wait for load/domcontentloaded/networkidle, a selector (visible/hidden), or a URL glob."""
+    """Wait for load/domcontentloaded/networkidle, a selector, a URL glob, or JS waitForFunction (js='() => ...')."""
     session = await get_session()
-    return dumps(await session.wait(state=state, selector=selector, url=url, timeout=timeout))
+    return dumps(await session.wait(state=state, selector=selector, url=url, js=js, timeout=timeout))
 
 
 @mcp.tool()
@@ -273,6 +298,13 @@ async def browser_get_tabs() -> str:
     session = await get_session()
     tabs = await session.get_tabs()
     return dumps({"tabs": tabs, "active_tab": next((t for t in tabs if t["active"]), None)})
+
+
+@mcp.tool()
+async def browser_switch_tab(index: int) -> str:
+    """Focus an open tab by index from browser_get_tabs."""
+    session = await get_session()
+    return dumps(await session.switch_tab(index))
 
 
 @mcp.tool()

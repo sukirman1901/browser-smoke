@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-09-12
+
+Dialog/popup waitForEvent, plus drag, paste, and waitForFunction.
+
+### Added
+
+- `browser_click(..., dialog=accept|dismiss, popup=true)` — JS dialog and `window.open` in the same click
+- `browser_switch_tab(index)` after a popup
+- `browser_drag(source, target)` and `browser_paste(selector, text)` (`insertText`, good for contenteditable)
+- `browser_wait(js=...)` — Playwright `waitForFunction`
+- Matching `browser_run` actions: `click` with `dialog`/`popup`, `drag`, `paste`, `wait` with `js`, `switch_tab`
+
+### Changed
+
+- Prefer `browser_click(dialog="accept")` over a separate `browser_handle_dialog` call. The old two-step still works.
+
 ## [1.2.1] - 2026-09-12
 
 P0 reliability: capture/block no longer fight each other; refs, dialogs, and empty sessions fail as JSON.

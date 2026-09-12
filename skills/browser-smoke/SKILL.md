@@ -37,21 +37,22 @@ Logged-in smoke (Playwright profile, not Chrome's daily profile):
 |------|-----|
 | `browser_open(url, headless?, user_data_dir?, channel?)` | Navigate. Persistent profile optional. |
 | `browser_snapshot(scope?)` | `@ref` list, same-origin iframes tagged `iframe`. |
-| `browser_run(actions_json)` | Batch including press, select, upload, download, dialog, reload. |
-| `browser_click` / `type` / `type_guess` / `hover` / `press` | Selector or `@n`. |
+| `browser_run(actions_json)` | Batch including click+dialog/popup, drag, paste, wait js, switch_tab. |
+| `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | Selector or `@n`. `click` accepts `dialog` and `popup`. |
 | `browser_select_option` / `browser_set_files` / `browser_download` | Forms and files. |
-| `browser_handle_dialog(action, prompt?)` | Call **before** the click that opens alert/confirm/prompt. |
-| `browser_wait` / `browser_reload` / `browser_scroll` | Timing and motion. |
+| `browser_handle_dialog(action, prompt?)` | Only if the trigger is not a click. Prefer `click(..., dialog=accept)`. |
+| `browser_wait` / `browser_reload` / `browser_scroll` | URL, selector, load, or `js` waitForFunction. |
 | `browser_execute` | Scrape / inspect JSON. |
 | `browser_screenshot` / `screenshot_diff` / `highlight` | Visual, on demand. |
 | `browser_console` / `errors` / `network_capture` / cookies / storage | Evidence. |
 | `browser_report` / `close` / tabs / offscreen | Wrap-up. |
 
-## Files and dialogs
+## Files, dialogs, popups
 
 ```
-browser_handle_dialog action=accept
-browser_click selector=@4
+browser_click selector=@4 dialog=accept
+browser_click selector=@5 popup=true
+browser_switch_tab index=0
 browser_set_files selector=@7 paths="/abs/path/cv.pdf"
 browser_download selector=@8
 ```

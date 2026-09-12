@@ -366,6 +366,23 @@ class BrowserSession:
             "snapshot": format_snapshot_lines(items),
         }
 
+    def _arm_dialog(self, dialog: str, prompt: str = "") -> dict | None:
+        if not dialog:
+            return None
+        if dialog not in ("accept", "dismiss"):
+            return {"status": "error", "message": "dialog must be accept or dismiss"}
+        self._dialog_action = dialog
+        self._dialog_prompt = prompt
+        return None
+
+    async def _adopt_page(self, page: Page) -> None:
+        self._on_new_page(page)
+        self.page = page
+        try:
+            await page.bring_to_front()
+        except Exception:
+            pass
+
     async def click(
         self,
         selector: str,
@@ -373,21 +390,51 @@ class BrowserSession:
         screenshot: bool = False,
         screenshot_base64: bool = False,
         timeout: int = 5000,
+        dialog: str = "",
+        prompt: str = "",
+        popup: bool = False,
     ) -> dict:
         err = self._need_page()
         if err:
             return err
+        armed = self._arm_dialog(dialog, prompt)
+        if armed:
+            return armed
         self._last_dialog = None
+        wait_ms = timeout if timeout > 0 else 5000
+        if popup:
+            wait_ms = max(wait_ms, 15000)
         try:
-            await (await self._locator(selector)).click(timeout=timeout)
-            result = {"status": "ok", "url": self.page.url}
+            loc = await self._locator(selector)
+            if popup:
+                async with self.page.expect_popup(timeout=wait_ms) as pending:
+                    await loc.click(timeout=min(wait_ms, 15000))
+                new_page = await pending.value
+                await self._adopt_page(new_page)
+                try:
+                    await new_page.wait_for_load_state("domcontentloaded", timeout=wait_ms)
+                except Exception:
+                    pass
+                result = {
+                    "status": "ok",
+                    "popup": True,
+                    "url": new_page.url,
+                    "title": await new_page.title(),
+                    "hint": "Call browser_snapshot again. browser_switch_tab to return.",
+                }
+            else:
+                await loc.click(timeout=wait_ms)
+                result = {"status": "ok", "url": self.page.url}
             if self._last_dialog:
                 result["dialog"] = self._last_dialog
                 self._last_dialog = None
             result.update(await self._shot_fields(screenshot, screenshot_base64))
             return result
         except Exception as e:
-            err = {"status": "error", "message": str(e)}
+            msg = str(e)
+            if popup and "Timeout" in msg:
+                msg = f"No popup opened. {msg}"
+            err = {"status": "error", "message": msg}
             err.update(await self._shot_fields(screenshot, screenshot_base64))
             return err
 
@@ -531,13 +578,16 @@ class BrowserSession:
         state: str = "load",
         selector: str = "",
         url: str = "",
+        js: str = "",
         timeout: int = 10000,
     ) -> dict:
         err = self._need_page()
         if err:
             return err
         try:
-            if selector:
+            if js:
+                await self.page.wait_for_function(js, timeout=timeout)
+            elif selector:
                 wait_state = state if state in ("visible", "hidden", "attached", "detached") else "visible"
                 await (await self._locator(selector)).wait_for(state=wait_state, timeout=timeout)
             elif url:
@@ -597,7 +647,7 @@ class BrowserSession:
             until = wait_until if wait_until in allowed else "domcontentloaded"
             response = await page.goto(url, wait_until=until, timeout=30000)
             title = await page.title()
-            self.page = page
+            await self._adopt_page(page)
             return {
                 "status": "ok",
                 "title": title,
@@ -616,6 +666,18 @@ class BrowserSession:
             except Exception:
                 tabs.append({"index": i, "title": "[closed]", "url": "", "active": False})
         return tabs
+
+    async def switch_tab(self, index: int) -> dict:
+        err = self._need_context()
+        if err:
+            return err
+        if index < 0 or index >= len(self._pages):
+            return {"status": "error", "message": f"tab {index} out of range (0-{len(self._pages) - 1})"}
+        page = self._pages[index]
+        if page.is_closed():
+            return {"status": "error", "message": f"tab {index} is closed"}
+        await self._adopt_page(page)
+        return {"status": "ok", "index": index, "url": page.url, "title": await page.title()}
 
     def get_console(self) -> list[dict]:
         return list(self._console_logs)
@@ -674,11 +736,34 @@ class BrowserSession:
         return {"status": "error", "message": f"unknown mode: {mode}"}
 
     async def handle_dialog(self, action: str = "accept", prompt: str = "") -> dict:
-        if action not in ("accept", "dismiss"):
-            return {"status": "error", "message": "action must be accept or dismiss"}
-        self._dialog_action = action
-        self._dialog_prompt = prompt
+        armed = self._arm_dialog(action, prompt)
+        if armed:
+            return armed
         return {"status": "ok", "next_dialog": action}
+
+    async def drag(self, source: str, target: str, *, timeout: int = 5000) -> dict:
+        err = self._need_page()
+        if err:
+            return err
+        try:
+            src = await self._locator(source)
+            dst = await self._locator(target)
+            await src.drag_to(dst, timeout=timeout)
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    async def paste(self, selector: str, text: str) -> dict:
+        err = self._need_page()
+        if err:
+            return err
+        try:
+            loc = await self._locator(selector)
+            await loc.focus()
+            await self.page.keyboard.insert_text(text)
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     async def set_files(self, selector: str, paths: str) -> dict:
         err = self._need_page()
@@ -765,9 +850,19 @@ class BrowserSession:
             await self.ensure_started()
             return await self.open(raw["url"], wait_until=raw.get("wait_until", "domcontentloaded"))
         if action == "click":
-            return await self.click(raw["selector"])
+            return await self.click(
+                raw["selector"],
+                dialog=raw.get("dialog", ""),
+                prompt=raw.get("prompt", ""),
+                popup=bool(raw.get("popup")),
+                timeout=int(raw.get("timeout", 15000 if raw.get("popup") else 5000)),
+            )
         if action == "type":
             return await self.type_text(raw["selector"], raw.get("text", ""))
+        if action == "paste":
+            return await self.paste(raw["selector"], raw.get("text", ""))
+        if action == "drag":
+            return await self.drag(raw.get("source") or raw["selector"], raw["target"])
         if action == "scroll":
             return await self.scroll(int(raw.get("x", 0)), int(raw.get("y", 200)))
         if action == "wait":
@@ -775,8 +870,11 @@ class BrowserSession:
                 state=raw.get("state", "load"),
                 selector=raw.get("selector", ""),
                 url=raw.get("url", ""),
+                js=raw.get("js") or raw.get("js_code") or "",
                 timeout=int(raw.get("timeout", 10000)),
             )
+        if action in ("switch_tab", "tab"):
+            return await self.switch_tab(int(raw["index"]))
         if action == "execute":
             return await self.execute(raw.get("js") or raw.get("js_code") or "")
         if action == "snapshot":

@@ -4,7 +4,7 @@ MCP browser plugin for smoke tests and light page scraping via Playwright. Compa
 
 Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
 
-See [CHANGELOG.md](CHANGELOG.md) for v1.2.1 bugfixes, v1.2 host/file/dialog tools, and v1.1 token defaults.
+See [CHANGELOG.md](CHANGELOG.md) for v1.2.2 popup/drag/paste/waitForFunction, v1.2.1 bugfixes, and earlier token defaults.
 
 ## Prerequisites
 
@@ -54,7 +54,7 @@ Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 | `browser_snapshot(scope?)` | Accessibility-ish `@ref` list. Prefer this. |
 | `browser_extract_dom()` | Compact buttons/inputs/links (no bounding boxes) |
 | `browser_execute(js_code)` | Page JS → JSON (scrape) |
-| `browser_wait(state, selector?, url?)` | load / visible / URL |
+| `browser_wait(state, selector?, url?, js?)` | load / visible / URL / `waitForFunction` |
 
 ### Navigation & batch
 
@@ -62,7 +62,7 @@ Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 |------|-------------|
 | `browser_open(url, headless?, wait_until?, channel?, user_data_dir?)` | Bundled Chromium. Persistent profile via `user_data_dir` |
 | `browser_run(actions_json)` | Many actions, one call |
-| `browser_open_tab` / `browser_get_tabs` / `browser_close` | Tabs |
+| `browser_open_tab` / `browser_get_tabs` / `browser_switch_tab` / `browser_close` | Tabs |
 | `browser_scroll(x?, y?)` | `scrollBy` (default down 200px) |
 | `browser_reload` / `browser_hover` / `browser_press` | Reload, menus, keys |
 
@@ -70,13 +70,15 @@ Interactive: local/global, then OpenCode / Cursor / Claude Code / all.
 
 | Tool | Description |
 |------|-------------|
-| `browser_click(selector)` | CSS or `@1` (iframe refs work) |
-| `browser_type(selector, text)` | Fill |
+| `browser_click(selector, dialog?, popup?)` | CSS or `@1`. `dialog=accept` for alert/confirm. `popup=true` for `window.open` |
+| `browser_type(selector, text)` | Fill (replaces value) |
+| `browser_paste(selector, text)` | Insert as one chunk (contenteditable) |
+| `browser_drag(source, target)` | Drag `@n` onto `@n` |
 | `browser_type_guess(selector, input_type?)` | Dummy email/password/… |
 | `browser_select_option(selector, value?, label?, index?)` | `<select>` |
 | `browser_set_files(selector, paths)` | File input, comma-separated abs paths |
 | `browser_download(selector, save_as?)` | Click + save to `artifacts/downloads/` |
-| `browser_handle_dialog(action, prompt?)` | `accept`/`dismiss` before the triggering click |
+| `browser_handle_dialog(action, prompt?)` | Arm the *next* dialog if the trigger is not a click |
 
 Pass `screenshot=true` on these only when you need a file path. `screenshot_base64=true` is an escape hatch.
 
@@ -134,10 +136,12 @@ Persistent login (Playwright profile, not your daily Chrome):
 browser_open(url="https://app.example.com", user_data_dir=".browser-smoke/profile")
 ```
 
-Upload / download / dialog:
+Upload / download / dialog / popup:
 
 ```
-browser_handle_dialog(action="accept")
+browser_click(selector="@4", dialog="accept")
+browser_click(selector="@5", popup=true)
+browser_switch_tab(index=0)
 browser_set_files(selector="@7", paths="/abs/path/cv.pdf")
 browser_download(selector="@8")
 ```
