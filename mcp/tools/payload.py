@@ -8,6 +8,18 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+SMOKE_VERSION = "1.4.2"
+
+# Snapshot interactive set. Keep this in sync with SNAPSHOT_JS in browser.py.
+SNAPSHOT_SELECTOR = (
+    "a, button, input, select, textarea, "
+    '[contenteditable]:not([contenteditable="false"]), '
+    '[role="button"], [role="link"], [role="textbox"], [role="checkbox"], '
+    '[role="menuitem"], [role="option"], [role="tab"], [role="dialog"], '
+    '[role="combobox"], [role="listbox"], [role="switch"], [role="treeitem"], '
+    '[role="slider"], [tabindex]:not([tabindex="-1"])'
+)
+
 # ~6k tokens of JSON; larger results must be narrowed by the caller.
 MAX_RESULT_CHARS = 24_000
 LOG_CAP = 40
@@ -15,6 +27,53 @@ LOG_TEXT_CHARS = 240
 LOG_MEM_CAP = 200
 MAX_SNAPSHOT_ITEMS = 80
 HREF_CHARS = 40
+
+
+def tool_error(message: str, *, code: str = "", hint: str = "") -> dict:
+    out = {"status": "error", "message": str(message)}
+    if code:
+        out["code"] = code
+    if hint:
+        out["hint"] = hint
+    return out
+
+
+def classify_target_error(message: str) -> dict:
+    """Map Playwright/locator failures so the agent can snapshot instead of force-clicking."""
+    msg = str(message)
+    low = msg.lower()
+    if "unknown ref" in low or "expired ref" in low:
+        return tool_error(
+            msg,
+            code="expired_ref",
+            hint="Call browser_snapshot again.",
+        )
+    if any(
+        s in low
+        for s in (
+            "intercepts pointer",
+            "outside of the viewport",
+            "not visible",
+            "not receive pointer",
+            "element is not stable",
+        )
+    ):
+        return tool_error(
+            msg,
+            code="intercepted",
+            hint="Covered or off-screen. Hover the menu host, or browser_scroll then snapshot, then click a fresh @n. Do not retry the same click.",
+        )
+    return tool_error(msg)
+
+
+def classify_type_error(message: str) -> dict:
+    msg = str(message)
+    low = msg.lower()
+    if "select" in low or "combobox" in low:
+        return tool_error(msg, hint="Use browser_select_option for <select>, not type.")
+    if "readonly" in low or "disabled" in low:
+        return tool_error(msg, hint="Target is not editable. Snapshot again.")
+    return classify_target_error(msg)
 
 
 def dumps(obj: Any) -> str:

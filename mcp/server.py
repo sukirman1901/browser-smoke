@@ -32,7 +32,7 @@ async def browser_open(
     refs: bool = False,
     session: str = "",
 ) -> str:
-    """Open/reconnect the living Google Chrome (~/.browser-smoke/chrome-attach). Then browser_snapshot for @refs. persist=false is Playwright Chromium for tests. cdp=9222 attaches if you already launched debug Chrome."""
+    """Open/reconnect the living Google Chrome (~/.browser-smoke/chrome-attach). Then browser_snapshot for @refs. persist=false is Playwright Chromium for tests. cdp=9222 attaches if you already launched debug Chrome. Returns version."""
     async with locked_session(session) as sess:
         try:
             await sess.ensure_started(
@@ -81,7 +81,7 @@ async def browser_click(
     popup: bool = False,
     session: str = "",
 ) -> str:
-    """Click CSS or @1. dialog=accept|dismiss handles the JS alert on this click. popup=true waits for window.open and focuses it."""
+    """Click CSS or @1. Scrolls the target into view first. Intercepted/covered is an error — snapshot again, do not retry the same click. dialog=accept|dismiss on this click. popup=true waits for window.open."""
     async with locked_session(session) as sess:
         result = await sess.click(
             selector,
@@ -154,13 +154,18 @@ async def browser_screenshot_diff(
 async def browser_scroll(
     x: int = 0,
     y: int = 200,
+    selector: str = "",
     screenshot: bool = False,
     screenshot_base64: bool = False,
     session: str = "",
 ) -> str:
-    """Scroll by delta pixels (scrollBy). Default is down 200px."""
+    """Scroll the page (default down 200px) or selector=@n into view. Then browser_snapshot — viewport @refs change. Click already scrolls its own target."""
     async with locked_session(session) as sess:
-        return dumps(await sess.scroll(x, y, screenshot=screenshot, screenshot_base64=screenshot_base64))
+        return dumps(
+            await sess.scroll(
+                x, y, selector=selector, screenshot=screenshot, screenshot_base64=screenshot_base64
+            )
+        )
 
 
 @mcp.tool()
@@ -226,7 +231,7 @@ async def browser_press(selector: str, key: str, session: str = "") -> str:
 
 @mcp.tool()
 async def browser_hover(selector: str, session: str = "") -> str:
-    """Hover an element (menus, tooltips)."""
+    """Hover an element (menus, tooltips). Then snapshot before clicking the revealed item."""
     async with locked_session(session) as sess:
         return dumps(await sess.hover(selector))
 
@@ -247,7 +252,7 @@ async def browser_wait(
     timeout: int = 10000,
     session: str = "",
 ) -> str:
-    """Wait for load/domcontentloaded/networkidle, a selector, a URL glob, or JS waitForFunction (js='() => ...')."""
+    """Wait for load/domcontentloaded/networkidle, a selector, a URL glob, or JS waitForFunction (js='() => ...'). timeout is milliseconds."""
     async with locked_session(session) as sess:
         return dumps(await sess.wait(state=state, selector=selector, url=url, js=js, timeout=timeout))
 
@@ -414,7 +419,7 @@ async def browser_set_cookie(
 
 @mcp.tool()
 async def browser_clear_cookies(session: str = "") -> str:
-    """Clear all cookies in the current context."""
+    """Clear all cookies in this session's context. Do not use on the living Chrome-attach profile — smoke tests should persist=false."""
     async with locked_session(session) as sess:
         return dumps(await sess.clear_cookies())
 

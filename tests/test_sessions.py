@@ -141,6 +141,15 @@ class RpcCoerceTests(unittest.TestCase):
             {"selector": "#f", "paths": "/a.pdf,/b.pdf"},
         )
 
+    def test_scroll_ref_string(self):
+        self.assertEqual(coerce_rpc_params("scroll", "@3"), {"selector": "@3"})
+
+    def test_scroll_pixels_string(self):
+        self.assertEqual(coerce_rpc_params("scroll", "800"), {"y": 800})
+
+    def test_scroll_pixels_number(self):
+        self.assertEqual(coerce_rpc_params("scroll", 400), {"y": 400})
+
     def test_none_is_empty_dict(self):
         self.assertEqual(coerce_rpc_params("wait", None), {})
 

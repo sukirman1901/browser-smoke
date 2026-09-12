@@ -68,7 +68,7 @@ Leave the window. Next chat, `smoke_browser_open` the next URL — same Chrome, 
 
 Named sessions (`session=work`) if two tasks must not share tabs. Then pass `session=` on **every** tool.
 
-Helpers inside `smoke_browser_script`: `open`, `click`, `type`, `snapshot`, `wait`, `execute`, `press`, `hover`, `scroll`, `dialog`, `download`, `upload`, `select`, `switchTab`. `wait("load")` and `wait("#ready")` are fine.
+Helpers inside `smoke_browser_script`: `open`, `click`, `type`, `snapshot`, `wait`, `execute`, `press`, `hover`, `scroll`, `dialog`, `download`, `upload`, `select`, `switchTab`. `wait("load")` and `wait("#ready")` are fine. `wait` timeout is milliseconds. `scroll(800)` is down 800px; `scroll('@3')` brings that ref into view.
 
 ## Smoke test (after you ship a feature)
 
@@ -181,7 +181,7 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | `smoke_browser_snapshot(scope?)` | Default. `@ref` list; same-origin iframes tagged `iframe` |
 | `smoke_browser_execute(js_code)` | Scrape / inspect, return JSON |
 | `smoke_browser_extract_dom()` | Buttons/inputs/links without `@refs`. Prefer snapshot |
-| `smoke_browser_wait(state, selector?, url?, js?)` | Load, visible, URL glob, or `waitForFunction` |
+| `smoke_browser_wait(state, selector?, url?, js?)` | Load, visible, URL glob, or `waitForFunction`. timeout is milliseconds |
 
 ### Move around
 
@@ -192,14 +192,14 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | `smoke_browser_script(js_code)` | One round trip with loops |
 | `smoke_browser_run(actions_json)` | JSON batch, no loops |
 | `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs |
-| `smoke_browser_scroll` / `reload` / `hover` / `press` | Scroll (default down 200px), reload, menus, keys |
+| `smoke_browser_scroll` / `reload` / `hover` / `press` | Page scroll (default down 200px) or `selector=@n` into view, then snapshot. Click already scrolls its target. Hover menus, then snapshot. |
 | `smoke_browser_close(shutdown?)` | Default leaves the living window. `shutdown=true` kills persist Chromium |
 
 ### Click, type, files
 
 | Tool | When to use |
 |------|-------------|
-| `smoke_browser_click(selector, dialog?, popup?)` | CSS or `@1` |
+| `smoke_browser_click(selector, dialog?, popup?)` | CSS or `@1`. Scrolls into view. Covered/off-screen is `code=intercepted`, not a silent force |
 | `smoke_browser_type` / `paste` / `drag` | Fill, contenteditable chunk, drag `@n` onto `@n` |
 | `smoke_browser_type_guess` | Dummy email/password for a smoke test |
 | `smoke_browser_select_option` | `<select>` by value, label, or index |
@@ -246,7 +246,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.1**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.2**.
 
 ## License
 

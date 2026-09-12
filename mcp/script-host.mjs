@@ -64,7 +64,14 @@ const page = {
     rpc("execute", { js_code: typeof js === "function" ? `(${js})()` : String(js) }),
   press: (selector, key) => rpc("press", { selector, key }),
   hover: (selector) => rpc("hover", { selector }),
-  scroll: (x = 0, y = 200) => rpc("scroll", { x, y }),
+  scroll: (a, b) => {
+    if (typeof a === "string") return rpc("scroll", { selector: a });
+    if (a && typeof a === "object" && !Array.isArray(a)) return rpc("scroll", asOpts(a));
+    if (typeof a === "number" && (b === undefined || b === null)) {
+      return rpc("scroll", { x: 0, y: a });
+    }
+    return rpc("scroll", { x: a ?? 0, y: b ?? 200 });
+  },
   reload: () => rpc("reload", {}),
   paste: (selector, text) => rpc("paste", { selector, text }),
   drag: (source, target) => rpc("drag", { source, target }),

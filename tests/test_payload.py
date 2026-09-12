@@ -137,6 +137,35 @@ class PayloadTests(unittest.TestCase):
         cap_append(items, 5, cap=5)
         self.assertEqual(items, [1, 2, 3, 4, 5])
 
+    def test_snapshot_selector_covers_editors_and_dialogs(self):
+        from tools.payload import SNAPSHOT_SELECTOR
+        self.assertIn("contenteditable", SNAPSHOT_SELECTOR)
+        self.assertIn('[role="dialog"]', SNAPSHOT_SELECTOR)
+        self.assertIn('[role="combobox"]', SNAPSHOT_SELECTOR)
+        self.assertIn('[role="listbox"]', SNAPSHOT_SELECTOR)
+        self.assertIn('[role="switch"]', SNAPSHOT_SELECTOR)
+
+    def test_classify_expired_ref(self):
+        from tools.payload import classify_target_error
+        err = classify_target_error("Expired ref @4. Call browser_snapshot again.")
+        self.assertEqual(err["code"], "expired_ref")
+        self.assertIn("snapshot", err["hint"])
+
+    def test_classify_intercepted(self):
+        from tools.payload import classify_target_error
+        err = classify_target_error("<div> intercepts pointer events")
+        self.assertEqual(err["code"], "intercepted")
+        self.assertIn("scroll", err["hint"].lower())
+
+    def test_classify_type_select(self):
+        from tools.payload import classify_type_error
+        err = classify_type_error("Cannot fill input of type select")
+        self.assertIn("select_option", err["hint"])
+
+    def test_version_constant(self):
+        from tools.payload import SMOKE_VERSION
+        self.assertEqual(SMOKE_VERSION, "1.4.2")
+
 
 class DomExtractorTests(unittest.TestCase):
     def test_guess_email(self):

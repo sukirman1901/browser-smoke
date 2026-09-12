@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-09-12
+
+Agent clicks and `@refs` are honest. Scroll has two jobs: the target, or the page.
+
+### Changed
+
+- Click/type/hover scroll the target into view, then act. No silent `force` retry when Playwright says intercepted or off-screen
+- Those failures return `code=intercepted` or `code=expired_ref` with a snapshot hint
+- Snapshot includes `contenteditable` and roles `dialog`, `combobox`, `listbox`, `switch`, `treeitem`, `slider`
+- `browser_open` returns `version`
+- `wait` timeout is documented as milliseconds
+
+### Added
+
+- `browser_scroll selector=@n` brings a known ref into view without clicking
+- Script `scroll(800)` is down 800px; `scroll('@3')` is into-view
+- After a page scroll, the result tells the agent to snapshot again
+
+### Notes
+
+Viewport snapshot still does not list below-the-fold controls. Scroll the page, snapshot, then click.
+
 ## [1.4.1] - 2026-09-12
 
 Daily persist is Google Chrome at `~/.browser-smoke/chrome-attach` (port 9222), auto-started. Playwright Chromium is `persist=false` only.

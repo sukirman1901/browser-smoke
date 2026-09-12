@@ -39,6 +39,13 @@ def coerce_rpc_params(method: str, params: object) -> dict:
             return {"selector": params}
         if method == "open":
             return {"url": params}
+        if method == "scroll":
+            if params.startswith("@"):
+                return {"selector": params}
+            try:
+                return {"y": int(params)}
+            except ValueError:
+                return {"selector": params}
         if method in (
             "click",
             "hover",
@@ -58,6 +65,10 @@ def coerce_rpc_params(method: str, params: object) -> dict:
         if method == "dialog":
             return {"handle": params}
         return {}
-    if isinstance(params, (int, float)) and method == "switch_tab":
-        return {"index": int(params)}
+    if isinstance(params, (int, float)):
+        if method == "switch_tab":
+            return {"index": int(params)}
+        if method == "scroll":
+            return {"y": int(params)}
+        return {}
     return {}

@@ -13,8 +13,12 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from tools.image_diff import compare_png
 from tools.payload import (
+    SNAPSHOT_SELECTOR,
+    SMOKE_VERSION,
     cap_append,
     cap_snapshot_items,
+    classify_target_error,
+    classify_type_error,
     format_snapshot_lines,
     matches_url,
     safe_artifact_name,
@@ -37,6 +41,7 @@ SNAPSHOT_JS = """
     }
     if (tag === "select") return "combobox";
     if (tag === "textarea") return "textbox";
+    if (el.isContentEditable) return "textbox";
     return el.getAttribute("role") || tag;
   };
   const visible = (el) => {
@@ -68,7 +73,7 @@ SNAPSHOT_JS = """
     n += 1;
   };
   document.querySelectorAll("[data-bs-ref]").forEach((el) => el.removeAttribute("data-bs-ref"));
-  const selector = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="menuitem"], [role="option"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+  const selector = __SNAPSHOT_SELECTOR__;
   const items = [];
   let n = start;
   document.querySelectorAll(selector).forEach((el) => {
@@ -81,7 +86,7 @@ SNAPSHOT_JS = """
   });
   return {items, next: n};
 }
-"""
+""".replace("__SNAPSHOT_SELECTOR__", json.dumps(SNAPSHOT_SELECTOR))
 
 
 @dataclass
@@ -289,12 +294,20 @@ class BrowserSession:
 
     def _need_page(self) -> dict | None:
         if self.page is None:
-            return {"status": "error", "message": "No page open. Call browser_open first."}
+            return {
+                "status": "error",
+                "code": "no_session",
+                "message": "No page open. Call browser_open first.",
+            }
         return None
 
     def _need_context(self) -> dict | None:
         if self.context is None:
-            return {"status": "error", "message": "No browser session. Call browser_open first."}
+            return {
+                "status": "error",
+                "code": "no_session",
+                "message": "No browser session. Call browser_open first.",
+            }
         return None
 
     def _setup_page_listeners(self, page: Page):
@@ -357,6 +370,12 @@ class BrowserSession:
             except Exception:
                 continue
         return loc.last
+
+    async def _bring_into_view(self, loc) -> None:
+        try:
+            await loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            return
 
     def _on_new_page(self, page: Page):
         if page not in self._pages:
@@ -470,6 +489,7 @@ class BrowserSession:
                 "persist": self.persist,
                 "attached": self.attached,
                 "mode": self.mode,
+                "version": SMOKE_VERSION,
             }
             result.update(await self._shot_fields(screenshot, screenshot_base64))
             if refs:
@@ -622,6 +642,7 @@ class BrowserSession:
             wait_ms = max(wait_ms, 15000)
         try:
             loc = await self._locator(selector)
+            await self._bring_into_view(loc)
             if popup:
                 async with self.page.expect_popup(timeout=wait_ms) as pending:
                     await loc.click(timeout=min(wait_ms, 15000))
@@ -639,24 +660,8 @@ class BrowserSession:
                     "hint": "Call browser_snapshot again. browser_switch_tab to return.",
                 }
             else:
-                try:
-                    await loc.click(timeout=wait_ms)
-                    result = {"status": "ok", "url": self.page.url}
-                except Exception as click_err:
-                    msg = str(click_err).lower()
-                    retry = any(
-                        s in msg
-                        for s in (
-                            "not visible",
-                            "intercepts pointer",
-                            "outside of the viewport",
-                            "not receive pointer",
-                        )
-                    )
-                    if not retry:
-                        raise
-                    await loc.click(timeout=wait_ms, force=True)
-                    result = {"status": "ok", "url": self.page.url, "forced": True}
+                await loc.click(timeout=wait_ms)
+                result = {"status": "ok", "url": self.page.url}
             if self._last_dialog:
                 result["dialog"] = self._last_dialog
                 self._last_dialog = None
@@ -666,7 +671,7 @@ class BrowserSession:
             msg = str(e)
             if popup and "Timeout" in msg:
                 msg = f"No popup opened. {msg}"
-            err = {"status": "error", "message": msg}
+            err = classify_target_error(msg)
             err.update(await self._shot_fields(screenshot, screenshot_base64))
             return err
 
@@ -683,12 +688,14 @@ class BrowserSession:
         if err:
             return err
         try:
-            await (await self._locator(selector)).fill(text, timeout=timeout)
+            loc = await self._locator(selector)
+            await self._bring_into_view(loc)
+            await loc.fill(text, timeout=timeout)
             result = {"status": "ok"}
             result.update(await self._shot_fields(screenshot, screenshot_base64))
             return result
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            return classify_type_error(str(e))
 
     async def screenshot(self, *, screenshot_base64: bool = False) -> dict:
         err = self._need_page()
@@ -793,6 +800,7 @@ class BrowserSession:
         self,
         x: int = 0,
         y: int = 200,
+        selector: str = "",
         *,
         screenshot: bool = False,
         screenshot_base64: bool = False,
@@ -800,10 +808,27 @@ class BrowserSession:
         err = self._need_page()
         if err:
             return err
-        await self.page.evaluate("([dx, dy]) => window.scrollBy(dx, dy)", [x, y])
-        result = {"status": "ok"}
-        result.update(await self._shot_fields(screenshot, screenshot_base64))
-        return result
+        try:
+            if selector:
+                loc = await self._locator(selector)
+                await loc.scroll_into_view_if_needed(timeout=5000)
+                result = {
+                    "status": "ok",
+                    "scrolled": selector,
+                    "hint": "Call browser_snapshot again. Viewport @refs changed.",
+                }
+            else:
+                await self.page.evaluate("([dx, dy]) => window.scrollBy(dx, dy)", [x, y])
+                result = {
+                    "status": "ok",
+                    "x": x,
+                    "y": y,
+                    "hint": "Call browser_snapshot again. Viewport @refs changed.",
+                }
+            result.update(await self._shot_fields(screenshot, screenshot_base64))
+            return result
+        except Exception as e:
+            return classify_target_error(str(e))
 
     async def wait(
         self,
@@ -839,7 +864,15 @@ class BrowserSession:
             result = await self.page.evaluate(js_code)
             return {"status": "ok", "result": result}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            msg = str(e)
+            low = msg.lower()
+            hint = ""
+            if "serializ" in low:
+                hint = "Return a JSON object, array, or string — not a DOM node or function."
+            err = {"status": "error", "message": msg}
+            if hint:
+                err["hint"] = hint
+            return err
 
     async def inject_script(self, script: str, url_pattern: str = "*"):
         err = self._need_context()
@@ -1098,6 +1131,7 @@ class BrowserSession:
         if err:
             return err
         loc = await self._locator(selector)
+        await self._bring_into_view(loc)
         if value:
             await loc.select_option(value=value)
         elif label:
@@ -1119,8 +1153,13 @@ class BrowserSession:
         err = self._need_page()
         if err:
             return err
-        await (await self._locator(selector)).hover()
-        return {"status": "ok"}
+        try:
+            loc = await self._locator(selector)
+            await self._bring_into_view(loc)
+            await loc.hover()
+            return {"status": "ok"}
+        except Exception as e:
+            return classify_target_error(str(e))
 
     async def reload(self, wait_until: str = "domcontentloaded") -> dict:
         err = self._need_page()
@@ -1165,7 +1204,11 @@ class BrowserSession:
         if action == "drag":
             return await self.drag(raw.get("source") or raw["selector"], raw["target"])
         if action == "scroll":
-            return await self.scroll(int(raw.get("x", 0)), int(raw.get("y", 200)))
+            return await self.scroll(
+                int(raw.get("x", 0) or 0),
+                int(raw.get("y", 200) if raw.get("y") is not None else 200),
+                selector=str(raw.get("selector") or ""),
+            )
         if action == "wait":
             return await self.wait(
                 state=raw.get("state", "load"),
@@ -1249,7 +1292,12 @@ class BrowserSession:
         if method == "hover":
             return await self.hover(params["selector"])
         if method == "scroll":
-            return await self.scroll(int(params.get("x", 0)), int(params.get("y", 200)))
+            y = params.get("y")
+            return await self.scroll(
+                int(params.get("x", 0) or 0),
+                int(y if y is not None else 200),
+                selector=str(params.get("selector") or ""),
+            )
         if method == "reload":
             return await self.reload(params.get("wait_until", "domcontentloaded"))
         if method == "paste":
