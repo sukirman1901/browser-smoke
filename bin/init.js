@@ -11,6 +11,8 @@ const CWD = process.cwd();
 const HOME = process.env.HOME || process.env.USERPROFILE || "/root";
 const OCODE_GLOBAL_DIR = join(HOME, ".config", "opencode");
 const HOSTS = ["opencode", "cursor", "claude"];
+const MCP_ID = "smoke";
+const MCP_ID_OLD = "browser-smoke";
 
 function ask(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -56,6 +58,11 @@ function stdMcpEntry(venvDir, mcpDir) {
   };
 }
 
+function putMcp(map, entry) {
+  map[MCP_ID] = entry;
+  delete map[MCP_ID_OLD];
+}
+
 function installSkill(dir) {
   const skillsDir = join(dir, "skills", "browser-smoke");
   mkdirSync(skillsDir, { recursive: true });
@@ -71,11 +78,11 @@ function writeOpenCode(scope, venvDir, mcpDir) {
   const configPath = join(configDir, "opencode.json");
   const config = readJson(configPath);
   if (!config.mcp) config.mcp = {};
-  config.mcp["browser-smoke"] = {
+  putMcp(config.mcp, {
     type: "local",
     command: [join(venvDir, "bin", "python3"), "-m", "server"],
     cwd: mcpDir,
-  };
+  });
   writeJson(configPath, config);
   installSkill(configDir);
   console.log(`   ✅ OpenCode: ${configPath}`);
@@ -88,7 +95,7 @@ function writeCursor(scope, venvDir, mcpDir) {
     : join(CWD, ".cursor", "mcp.json");
   const config = readJson(configPath);
   if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["browser-smoke"] = stdMcpEntry(venvDir, mcpDir);
+  putMcp(config.mcpServers, stdMcpEntry(venvDir, mcpDir));
   writeJson(configPath, config);
   installSkill(isGlobal ? join(HOME, ".cursor") : join(CWD, ".cursor"));
   console.log(`   ✅ Cursor: ${configPath}`);
@@ -101,7 +108,7 @@ function writeClaude(scope, venvDir, mcpDir) {
     : join(CWD, ".mcp.json");
   const config = readJson(configPath);
   if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["browser-smoke"] = stdMcpEntry(venvDir, mcpDir);
+  putMcp(config.mcpServers, stdMcpEntry(venvDir, mcpDir));
   writeJson(configPath, config);
   installSkill(isGlobal ? join(HOME, ".claude") : join(CWD, ".claude"));
   console.log(`   ✅ Claude Code: ${configPath}`);

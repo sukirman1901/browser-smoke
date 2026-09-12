@@ -13,7 +13,7 @@ from tools.dom_extractor import classify_inputs, guess_input_value
 from tools.payload import clip_logs, compact_classified, compact_network, dumps
 from tools.reporter import generate_report
 
-mcp = FastMCP("browser-smoke")
+mcp = FastMCP("smoke")
 
 REPORT_FILE = "artifacts/smoke-report.md"
 

@@ -1,12 +1,14 @@
 {
   "name": "browser-smoke",
-  "version": "1.2.2",
-  "description": "MCP browser plugin for smoke tests and light scraping — compact Playwright tools",
+  "version": "1.2.3",
+  "description": "MCP Playwright browser for agents — daily tasks, scrape, and smoke tests",
   "keywords": [
     "opencode",
     "opencode-plugin",
     "mcp",
     "browser",
+    "browser-agent",
+    "scraping",
     "testing",
     "smoke-test",
     "playwright"

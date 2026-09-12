@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-09-12
+
+MCP server id is `smoke` so OpenCode tools show as `smoke_browser_open`, not `browser-smoke_browser_open`. Package/repo stay `browser-smoke`. `init` removes the old `browser-smoke` MCP key.
+
 ## [1.2.2] - 2026-09-12
 
 Dialog/popup waitForEvent, plus drag, paste, and waitForFunction.

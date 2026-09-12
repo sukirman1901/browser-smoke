@@ -1,6 +1,6 @@
 ---
 name: browser-smoke
-description: Use when testing UI after feature work, before commit/PR, scraping a page, or filling a form that needs upload/download/dialogs. Prefer compact tools; never request screenshots unless a visual bug needs evidence.
+description: Use when controlling a browser from the agent — daily tasks (open a site, fill a form, scrape), smoke-test after feature work, upload/download/dialogs. Prefer compact tools; never request screenshots unless a visual bug needs evidence.
 ---
 
 ## Token rules (mandatory)
@@ -15,19 +15,19 @@ Do **not** return images unless the user asks for a visual check.
 
 ## Core loop
 
+Daily task or smoke — same tools:
+
 ```
 browser_open url=...
 browser_snapshot
 browser_run actions_json=[{"action":"type","selector":"@1","text":"..."},{"action":"click","selector":"@2"}]
-browser_console
-browser_errors
-browser_report results_json=...
-browser_close
 ```
+
+Smoke extras (optional): `browser_console`, `browser_errors`, `browser_report`, then `browser_close`.
 
 Failures block. Debug with console, errors, network_capture `mode=get` (no headers), then `browser_execute`. Screenshot last.
 
-Logged-in smoke (Playwright profile, not Chrome's daily profile):
+Logged-in session (Playwright profile, not Chrome's daily profile):
 
 `browser_open url=... user_data_dir=".browser-smoke/profile"`
 

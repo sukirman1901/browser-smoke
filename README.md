@@ -1,10 +1,10 @@
 # Browser Smoke
 
-MCP browser plugin for smoke tests and light page scraping via Playwright. Compact JSON, screenshots off by default.
+MCP Playwright browser for agents: daily tasks (open, click, fill, scrape) and smoke tests. Compact JSON, screenshots off by default.
 
 Works with [OpenCode](https://opencode.ai), Cursor, Claude Code, and any MCP client.
 
-See [CHANGELOG.md](CHANGELOG.md) for v1.2.2 popup/drag/paste/waitForFunction, v1.2.1 bugfixes, and earlier token defaults.
+See [CHANGELOG.md](CHANGELOG.md) for v1.2.3 (`smoke_browser_open` in OpenCode), v1.2.2 popup/drag/paste, and earlier token defaults.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ Tool results are compact JSON. Clicks, types, and `open` **do not** attach PNG. 
 | `browser_run` for a flow | 8 separate MCP calls |
 | `browser_execute` returning JSON | dump `innerHTML` or base64 images |
 
-`npx browser-smoke init` always refreshes the MCP server files so this upgrade lands.
+`npx browser-smoke init` always refreshes the MCP server files so this upgrade lands. OpenCode tool names are `smoke_browser_open` (MCP id `smoke` + tool `browser_open`).
 
 ## Quick install
 
