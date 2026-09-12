@@ -28,13 +28,24 @@ async def browser_open(
     channel: str = "",
     user_data_dir: str = "",
     persist: bool = False,
+    cdp: str = "",
     session: str = "",
 ) -> str:
-    """Open a URL. persist=true keeps Chromium alive across MCP restarts (CDP). session names isolate tasks. Pass session= on every later tool too."""
+    """Open a URL. persist=true = our Chromium. cdp=9222 attaches to a Chrome you launched with remote debugging (not the daily Gmail profile on Chrome 136+). Pass session= on later tools."""
     if persist and channel:
         return dumps({
             "status": "error",
             "message": "persist=true cannot use channel; omit channel to use bundled Chromium",
+        })
+    if persist and cdp:
+        return dumps({
+            "status": "error",
+            "message": "cdp attach cannot be combined with persist",
+        })
+    if cdp and channel:
+        return dumps({
+            "status": "error",
+            "message": "cdp attach cannot be combined with channel",
         })
     async with locked_session(session) as sess:
         try:
@@ -43,8 +54,9 @@ async def browser_open(
                 channel=channel,
                 user_data_dir=user_data_dir,
                 persist=persist,
+                cdp=cdp,
             )
-        except (ValueError, RuntimeError) as e:
+        except Exception as e:
             return dumps({"status": "error", "message": str(e)})
         result = await sess.open(
             url,
@@ -54,6 +66,7 @@ async def browser_open(
         )
         result["session"] = sess.name
         result["persist"] = sess.persist
+        result["attached"] = sess.attached
         return dumps(result)
 
 
@@ -442,6 +455,7 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
                 "current": n == registry.current,
                 "open": sess.page is not None,
                 "persist": bool(sess.persist or port),
+                "attached": sess.attached,
                 "cdp": cdp_alive(port) if port else False,
             })
         if os.path.isdir(state_dir()):
@@ -458,6 +472,7 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
                     "current": False,
                     "open": False,
                     "persist": True,
+                    "attached": False,
                     "cdp": cdp_alive(port) if port else False,
                 })
         return dumps({"current": registry.current, "sessions": rows})
@@ -474,12 +489,13 @@ async def browser_session(action: str = "current", name: str = "", shutdown: boo
         "current": registry.current,
         "open": sess.page is not None,
         "persist": sess.persist,
+        "attached": sess.attached,
     })
 
 
 @mcp.tool()
 async def browser_close(shutdown: bool = True, session: str = "") -> str:
-    """Disconnect the session. shutdown=true (default) kills Chromium. persist sessions: shutdown=false leaves the window."""
+    """Disconnect the session. shutdown=true kills persist Chromium. cdp-attached Chrome is never killed."""
     async with locked_session(session) as sess:
         key = sess.name
         await sess.close(shutdown=shutdown)

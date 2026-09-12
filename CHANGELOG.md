@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-09-12
+
+Attach to a Chrome you launched with remote debugging.
+
+### Added
+
+- `browser_open(..., cdp=9222)` (or `http://127.0.0.1:9222` / `ws://…`) connects over CDP
+- `browser_close` on an attached session disconnects Playwright only — it never quits that Chrome
+- `cdp` cannot be combined with `persist` or `channel`
+
+### Notes
+
+- Chrome 136+ ignores `--remote-debugging-port` on the daily/default profile. Launch a **separate** Chrome with a non-default `--user-data-dir`. Log in there. That is not Gmail already open in your normal Chrome.
+
 ## [1.3.3] - 2026-09-12
 
 Docs and CLI match the MCP id `smoke`. Install from GitHub (`npx github:sukirman1901/browser-smoke`); do not use `npx smoke` (different npm package). Bin alias `smoke`. OpenCode examples use `smoke_browser_*`.

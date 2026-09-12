@@ -5,7 +5,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 
-from tools.persist import allocate_port, kill_pid, port_free, safe_session_name, session_cdp_port
+from tools.persist import (
+    allocate_port,
+    kill_pid,
+    normalize_cdp_endpoint,
+    port_free,
+    safe_session_name,
+    session_cdp_port,
+)
 from tools.registry import SessionRegistry
 from tools.script_rpc import coerce_rpc_params
 
@@ -19,6 +26,22 @@ class PersistHelperTests(unittest.TestCase):
     def test_port_is_stable(self):
         self.assertEqual(session_cdp_port("work"), session_cdp_port("work"))
         self.assertNotEqual(session_cdp_port("work"), session_cdp_port("other"))
+
+    def test_normalize_cdp_endpoint(self):
+        self.assertEqual(normalize_cdp_endpoint(""), "")
+        self.assertEqual(normalize_cdp_endpoint("9222"), "http://127.0.0.1:9222")
+        self.assertEqual(
+            normalize_cdp_endpoint("http://127.0.0.1:9222"),
+            "http://127.0.0.1:9222",
+        )
+        self.assertEqual(
+            normalize_cdp_endpoint("ws://127.0.0.1:9222/devtools/browser/abc"),
+            "ws://127.0.0.1:9222/devtools/browser/abc",
+        )
+        self.assertEqual(
+            normalize_cdp_endpoint("127.0.0.1:9222"),
+            "http://127.0.0.1:9222",
+        )
 
 
 class RegistryTests(unittest.TestCase):

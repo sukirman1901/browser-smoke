@@ -65,6 +65,20 @@ def cdp_alive(port: int) -> bool:
         return False
 
 
+def normalize_cdp_endpoint(raw: str) -> str:
+    """Accept 9222, 127.0.0.1:9222, or a full http/ws URL."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return f"http://127.0.0.1:{s}"
+    if s.startswith(("http://", "https://", "ws://", "wss://")):
+        return s
+    if "://" not in s:
+        return f"http://{s}"
+    return s
+
+
 def port_free(port: int) -> bool:
     sock = socket.socket()
     try:

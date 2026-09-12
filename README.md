@@ -114,7 +114,33 @@ smoke_browser_open url=https://app.example.com user_data_dir=.browser-smoke/prof
 
 Cookies live in that folder. Gmail already open in your Chrome will not appear here.
 
-Need stock Chrome instead of bundled Chromium? `channel=chrome`. Do not combine `channel` with `persist=true`.
+Need stock Chrome instead of bundled Chromium? `channel=chrome`. Do not combine `channel` with `persist=true` or `cdp=`.
+
+## Attach to a debug Chrome (`cdp=`)
+
+This drives a Chrome **you** started with remote debugging. It is not the window where you already have Gmail.
+
+Chrome 136+ ignores `--remote-debugging-port` on the daily profile. Use a **separate** user-data-dir. Log in inside that window if you need cookies.
+
+1. Quit daily Chrome if it is using the same binary and you hit a lock (optional on macOS if you only open the debug profile).
+2. Start debug Chrome (macOS):
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.browser-smoke/chrome-attach" \
+  --no-first-run --no-default-browser-check
+```
+
+3. In the agent:
+
+```
+smoke_browser_open url=https://example.com cdp=9222
+smoke_browser_snapshot
+smoke_browser_close
+```
+
+`cdp=` also accepts `http://127.0.0.1:9222` or a `ws://` DevTools URL. `smoke_browser_close` disconnects; it does **not** quit that Chrome. Do not combine `cdp` with `persist` or `channel`.
 
 ## Forms, files, dialogs, popups
 
@@ -134,8 +160,8 @@ Prefer `dialog=accept` on the click that opens the alert. Arm the next dialog on
 
 | You might expect | What you actually get |
 |------------------|------------------------|
-| Agent uses the Chrome window you are looking at | Separate Playwright Chromium |
-| Gmail / cookies from your daily Chrome | Empty profile, unless the agent logs in (or you set `user_data_dir`) |
+| Agent uses the Chrome window you are looking at | Separate Playwright Chromium. `cdp=` attaches only to a debug Chrome you launched |
+| Gmail / cookies from your daily Chrome | Empty unless the agent logs in, you set `user_data_dir`, or you log in inside the debug Chrome (`cdp=`) |
 | Window dies when the chat ends | Only if you close with `shutdown=true`. Persist + `shutdown=false` keeps it |
 | Task Spaces / take over from the agent | Named MCP sessions. You do not share tabs with the agent |
 | Screenshot on every click | Path on disk only when `screenshot=true` |
@@ -158,13 +184,13 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 
 | Tool | When to use |
 |------|-------------|
-| `smoke_browser_open(url, persist?, session?, user_data_dir?, channel?)` | Start or reconnect. Pass `session=` on later tools too |
+| `smoke_browser_open(url, persist?, session?, user_data_dir?, channel?, cdp?)` | Start, persist Chromium, or attach (`cdp=9222`). Pass `session=` on later tools too |
 | `smoke_browser_session` | `current` / `use` / `list` / `close` named sessions |
 | `smoke_browser_script(js_code)` | One round trip with loops |
 | `smoke_browser_run(actions_json)` | JSON batch, no loops |
 | `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs |
 | `smoke_browser_scroll` / `reload` / `hover` / `press` | Scroll (default down 200px), reload, menus, keys |
-| `smoke_browser_close(shutdown?)` | `shutdown=false` leaves a persist window |
+| `smoke_browser_close(shutdown?)` | `shutdown=false` leaves persist Chromium. Attached Chrome is never killed |
 
 ### Click, type, files
 
@@ -198,6 +224,8 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | Tools look stale, or every click returns a screenshot | Run setup again and restart the host |
 | OpenCode shows `browser-smoke_browser_open` | Old MCP key. Setup writes id `smoke` |
 | `persist=true` + `channel=chrome` errors | Omit `channel`. Persist is bundled Chromium only |
+| CDP connect failed / Chrome 136+ | Daily Gmail Chrome cannot be attached. Launch debug Chrome with a non-default `--user-data-dir` and `cdp=9222` |
+| `cdp` + `persist` / `channel` errors | Use only `cdp=` |
 | Connection refused | The target app is not running |
 | Python not found | Install Python 3.10+ |
 | Two sessions keep hitting the same tab | Pass `session=` on every tool |
@@ -214,7 +242,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.3.3**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.3.4**.
 
 ## License
 

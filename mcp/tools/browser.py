@@ -92,6 +92,7 @@ class BrowserSession:
     _block_route_installed: bool = False
     name: str = "default"
     persist: bool = False
+    attached: bool = False
     _cdp_port: Optional[int] = None
     _chrome_pid: Optional[int] = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -113,11 +114,13 @@ class BrowserSession:
         channel: str = "",
         user_data_dir: str = "",
         persist: bool = False,
+        cdp: str = "",
     ):
         from tools.persist import (
             allocate_port,
             cdp_alive,
             kill_pid,
+            normalize_cdp_endpoint,
             pid_on_port,
             read_state,
             spawn_chromium,
@@ -127,10 +130,40 @@ class BrowserSession:
 
         if persist and channel:
             raise ValueError("persist=true cannot use channel; omit channel to use bundled Chromium")
+        if cdp and persist:
+            raise ValueError("cdp attach cannot be combined with persist")
+        if cdp and channel:
+            raise ValueError("cdp attach cannot be combined with channel")
 
         self.persist = persist
+        self.attached = False
         self._pw = await async_playwright().start()
         os.makedirs(os.path.join(os.getcwd(), "artifacts", "downloads"), exist_ok=True)
+        if cdp:
+            endpoint = normalize_cdp_endpoint(cdp)
+            try:
+                self.browser = await self._pw.chromium.connect_over_cdp(endpoint)
+            except Exception as e:
+                if self._pw:
+                    try:
+                        await self._pw.stop()
+                    except Exception:
+                        pass
+                    self._pw = None
+                raise RuntimeError(
+                    "CDP connect failed. Chrome 136+ ignores --remote-debugging-port on the "
+                    "daily profile (Gmail in your normal Chrome). Quit that Chrome, launch a "
+                    "separate debug Chrome with --remote-debugging-port=9222 and a non-default "
+                    f"--user-data-dir, then retry. ({e})"
+                ) from e
+            self.attached = True
+            if self.browser.contexts:
+                self.context = self.browser.contexts[0]
+            else:
+                self.context = await self.browser.new_context(accept_downloads=True)
+            self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+            self._bind_io()
+            return
         if persist:
             profile = os.path.abspath(user_data_dir) if user_data_dir else os.path.abspath(
                 os.path.join(".browser-smoke", "profiles", self.name)
@@ -216,6 +249,7 @@ class BrowserSession:
         channel: str = "",
         user_data_dir: str = "",
         persist: bool = False,
+        cdp: str = "",
     ):
         if self.page is None:
             await self.start(
@@ -223,6 +257,7 @@ class BrowserSession:
                 channel=channel,
                 user_data_dir=user_data_dir,
                 persist=persist or self.persist,
+                cdp=cdp,
             )
 
     def _need_page(self) -> dict | None:
@@ -1144,6 +1179,22 @@ class BrowserSession:
     async def close(self, shutdown: bool = True):
         from tools.persist import clear_state, kill_pid
 
+        if self.attached:
+            if self._pw:
+                try:
+                    await self._pw.stop()
+                except Exception:
+                    pass
+            self.browser = None
+            self.context = None
+            self.page = None
+            self._pw = None
+            self._pages.clear()
+            self._refs.clear()
+            self._listened_pages.clear()
+            self.attached = False
+            return
+
         if self.persist and not shutdown:
             if self._pw:
                 try:
@@ -1203,6 +1254,7 @@ class BrowserSession:
         self._cdp_port = None
         self._chrome_pid = None
         self.persist = False
+        self.attached = False
 
 
 from tools.registry import SessionRegistry

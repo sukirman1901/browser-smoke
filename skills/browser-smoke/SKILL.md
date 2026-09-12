@@ -36,17 +36,21 @@ browser_script js_code="await snapshot(); await click('@1'); log(await execute('
 
 `browser_close shutdown=false` leaves Chromium running. Next chat: `browser_open persist=true session=work` reconnects.
 
-Two named sessions: pass `session=` on **every** tool (`snapshot`, `click`, `script`, `close`), not only `open`. `persist=true` cannot be combined with `channel`.
+Two named sessions: pass `session=` on **every** tool (`snapshot`, `click`, `script`, `close`), not only `open`. `persist=true` cannot be combined with `channel` or `cdp`.
 
 Logged-in Playwright profile (not Chrome's daily profile):
 
 `browser_open url=... user_data_dir=".browser-smoke/profile"`
 
+Attach to a debug Chrome (not daily Gmail; Chrome 136+ ignores remote debugging on the default profile):
+
+Launch Chrome with `--remote-debugging-port=9222` and `--user-data-dir=$HOME/.browser-smoke/chrome-attach`, then `browser_open url=... cdp=9222`. Close disconnects; it does not quit that Chrome.
+
 ## Tools
 
 | Tool | Use |
 |------|-----|
-| `browser_open(url, persist?, session?, user_data_dir?)` | `persist=true` keeps Chromium (CDP). `session` isolates tasks. |
+| `browser_open(url, persist?, session?, user_data_dir?, cdp?)` | `persist=true` keeps our Chromium. `cdp=9222` attaches to debug Chrome. |
 | `browser_session` | `use` / `list` / `close` named sessions. |
 | `browser_script(js_code)` | JS snippet with open/click/type/snapshot/wait/execute. Prefer for loops. |
 | `browser_run(actions_json)` | JSON batch when you do not need loops. |
