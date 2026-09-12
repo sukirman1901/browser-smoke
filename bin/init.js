@@ -74,11 +74,13 @@ function putMcp(map, entry) {
 }
 
 function installSkill(dir) {
-  const skillsDir = join(dir, "skills", "browser-smoke");
-  mkdirSync(skillsDir, { recursive: true });
   const skillSrc = join(PKG_DIR, "skills", "browser-smoke", "SKILL.md");
-  if (existsSync(skillSrc)) {
-    writeFileSync(join(skillsDir, "SKILL.md"), readFileSync(skillSrc, "utf-8"));
+  if (!existsSync(skillSrc)) return;
+  const body = readFileSync(skillSrc, "utf-8");
+  for (const name of ["smoke", "browser-smoke"]) {
+    const skillsDir = join(dir, "skills", name);
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(skillsDir, "SKILL.md"), body);
   }
 }
 
@@ -138,7 +140,7 @@ async function main() {
 
   console.log(`
 ╔══════════════════════════════════════╗
-║   Browser Smoke MCP - Setup         ║
+║   Smoke MCP - Setup                 ║
 ╚══════════════════════════════════════╝
 `);
 

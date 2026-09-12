@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-09-12
+
+Docs and CLI match the MCP id `smoke`. Install from GitHub (`npx github:sukirman1901/browser-smoke`); do not use `npx smoke` (different npm package). Bin alias `smoke`. OpenCode examples use `smoke_browser_*`.
+
 ## [1.3.2] - 2026-09-12
 
 Rewrite README as a usage guide: quick start, first task, daily/smoke/scrape recipes, and an honest “what this is not” table. No runtime changes.

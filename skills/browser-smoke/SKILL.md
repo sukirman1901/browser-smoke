@@ -1,5 +1,5 @@
 ---
-name: browser-smoke
+name: smoke
 description: Use when controlling a browser from the agent — daily tasks (open a site, fill a form, scrape), smoke-test after feature work, upload/download/dialogs. Prefer compact tools; never request screenshots unless a visual bug needs evidence.
 ---
 
