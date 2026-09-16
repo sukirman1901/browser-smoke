@@ -108,9 +108,7 @@ def evaluate(
     kind = normalize_expect(expect)
     if kind in ("text", "url"):
         matched = expected_text in (observed or "")
-    elif kind == "visible":
-        matched = bool(observed)
-    elif kind == "hidden":
+    elif kind in ("visible", "hidden"):
         matched = bool(observed)
     elif kind == "count":
         try:

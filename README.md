@@ -249,7 +249,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.5.0**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.5.1**.
 
 ## License
 

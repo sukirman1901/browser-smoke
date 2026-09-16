@@ -1009,7 +1009,11 @@ class BrowserSession:
         deadline = loop.time() + timeout_ms / 1000
         last_actual = ""
         while True:
-            ok, actual = await self._assert_once(kind, text, selector, count, negate)
+            remaining = deadline - loop.time()
+            wait_ms = 1 if remaining <= 0 else min(1000, max(1, int(remaining * 1000)))
+            ok, actual = await self._assert_once(
+                kind, text, selector, count, negate, wait_ms
+            )
             if ok:
                 return True, actual
             last_actual = actual
@@ -1021,7 +1025,13 @@ class BrowserSession:
             await asyncio.sleep(min(0.1, remaining))
 
     async def _assert_once(
-        self, kind: str, text: str, selector: str, count: int, negate: bool
+        self,
+        kind: str,
+        text: str,
+        selector: str,
+        count: int,
+        negate: bool,
+        wait_ms: int = 1000,
     ) -> tuple[bool, str]:
         if kind == "url":
             observed = self.page.url
@@ -1038,7 +1048,7 @@ class BrowserSession:
             observed = ""
             if n > 0:
                 try:
-                    observed = await loc.first.inner_text(timeout=1000)
+                    observed = await loc.first.inner_text(timeout=wait_ms)
                 except Exception:
                     observed = ""
             ok = evaluate("text", observed=observed, expected_text=text, negate=negate)
@@ -1053,7 +1063,7 @@ class BrowserSession:
                 ok = evaluate("input_value", observed="", expected_text=text, negate=negate)
                 return ok, "no input"
             try:
-                observed = await loc.first.input_value(timeout=1000)
+                observed = await loc.first.input_value(timeout=wait_ms)
             except Exception as e:
                 return False, clip_actual(str(e))
             ok = evaluate("input_value", observed=observed, expected_text=text, negate=negate)

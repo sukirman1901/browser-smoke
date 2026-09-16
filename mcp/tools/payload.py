@@ -8,7 +8,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-SMOKE_VERSION = "1.5.0"
+SMOKE_VERSION = "1.5.1"
 
 # Snapshot interactive set. Keep this in sync with SNAPSHOT_JS in browser.py.
 SNAPSHOT_SELECTOR = (
