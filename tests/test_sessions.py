@@ -153,6 +153,18 @@ class RpcCoerceTests(unittest.TestCase):
     def test_none_is_empty_dict(self):
         self.assertEqual(coerce_rpc_params("wait", None), {})
 
+    def test_assert_dict_passthrough(self):
+        self.assertEqual(
+            coerce_rpc_params(
+                "assert",
+                {"expect": "text", "text": "Saved", "selector": "@3", "negate": False},
+            ),
+            {"expect": "text", "text": "Saved", "selector": "@3", "negate": False},
+        )
+
+    def test_assert_string_is_not_silently_a_selector(self):
+        self.assertEqual(coerce_rpc_params("assert", "Saved"), {})
+
 
 class PersistPortTests(unittest.TestCase):
     def test_port_free_false_when_bound(self):

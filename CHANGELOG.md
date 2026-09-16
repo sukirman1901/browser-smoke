@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-16
+
+Smoke tests get a real pass/fail. Snapshot stays the `@n` map.
+
+### Added
+
+- `browser_assert` (`expect=text|url|visible|hidden|count|input_value`) returns `ok` or `assert_fail`, with `expected` / `actual`
+- Matching `assert` action in `browser_run` and `assert({...})` in `browser_script`
+- `browser_run` / `browser_script` stop on `assert_fail` (same as the first error)
+
+### Notes
+
+- `wait` is still “block until ready”. `assert` is the verdict.
+- Hidden (or a gone `@n`) is a pass for `expect=hidden`, not an expired-ref error. Unknown `@n` (never snapshotted) is still an error.
+- `browser_report` still requires `results_json`. No transcript file.
+
 ## [1.4.3] - 2026-09-12
 
 Snapshot is the accessibility tree (Playwright `aria_snapshot` AI mode), not a CSS tag list. `@n` is unchanged.

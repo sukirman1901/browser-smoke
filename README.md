@@ -49,10 +49,11 @@ Same loop for a daily task and a smoke test (OpenCode names):
 
 1. `smoke_browser_open` the URL.
 2. `smoke_browser_snapshot` — this is the selector map: `@1`, `@2`, `@3`.
-3. Click or type those refs. After navigation, if a ref errors, or to verify a result: snapshot again.
-4. Several steps: **one** `smoke_browser_script` (or one `smoke_browser_run`). Do not chain eight MCP execute calls.
-5. Scrape with `smoke_browser_execute` returning a small JSON array — not `innerHTML`.
-6. Screenshot only for a visual bug. Never `screenshot_base64`.
+3. Click or type those refs. After navigation, if a ref errors, snapshot again.
+4. Prove the result with `smoke_browser_assert` (text/url/visible/…). Snapshot is not the verdict.
+5. Several steps: **one** `smoke_browser_script` (or one `smoke_browser_run`). Do not chain eight MCP execute calls.
+6. Scrape with `smoke_browser_execute` returning a small JSON array — not `innerHTML`.
+7. Screenshot only for a visual bug. Never `screenshot_base64`.
 
 ## Daily task (window stays up)
 
@@ -68,7 +69,7 @@ Leave the window. Next chat, `smoke_browser_open` the next URL — same Chrome, 
 
 Named sessions (`session=work`) if two tasks must not share tabs. Then pass `session=` on **every** tool.
 
-Helpers inside `smoke_browser_script`: `open`, `click`, `type`, `snapshot`, `wait`, `execute`, `press`, `hover`, `scroll`, `dialog`, `download`, `upload`, `select`, `switchTab`. `wait("load")` and `wait("#ready")` are fine. `wait` timeout is milliseconds. `scroll(800)` is down 800px; `scroll('@3')` brings that ref into view.
+Helpers inside `smoke_browser_script`: `open`, `click`, `type`, `snapshot`, `wait`, `assert`, `execute`, `press`, `hover`, `scroll`, `dialog`, `download`, `upload`, `select`, `switchTab`. `wait("load")` and `wait("#ready")` are fine. `wait` timeout is milliseconds. `assert({ expect: "text", text: "Saved" })` is the verdict. `scroll(800)` is down 800px; `scroll('@3')` brings that ref into view.
 
 ## Smoke test (after you ship a feature)
 
@@ -78,6 +79,7 @@ Throwaway browser — **must** `persist=false` or you pollute the living profile
 smoke_browser_open url=http://localhost:5173 persist=false session=test
 smoke_browser_snapshot
 smoke_browser_run actions_json='[{"action":"type","selector":"@1","text":"test@test.com"},{"action":"click","selector":"@3"}]'
+smoke_browser_assert expect=text text="..."
 smoke_browser_console
 smoke_browser_errors
 smoke_browser_report results_json
@@ -181,7 +183,8 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | `smoke_browser_snapshot(scope?)` | Default. Accessibility `@ref` list; cross-origin iframes tagged `iframe` |
 | `smoke_browser_execute(js_code)` | Scrape / inspect, return JSON |
 | `smoke_browser_extract_dom()` | Buttons/inputs/links without `@refs`. Prefer snapshot |
-| `smoke_browser_wait(state, selector?, url?, js?)` | Load, visible, URL glob, or `waitForFunction`. timeout is milliseconds |
+| `smoke_browser_wait(state, selector?, url?, js?)` | Load, visible, URL glob, or `waitForFunction`. timeout is milliseconds. Not a test verdict. |
+| `smoke_browser_assert(expect, text?, selector?, count?, negate?)` | Pass/fail: `text` `url` `visible` `hidden` `count` `input_value`. `assert_fail` ≠ tool error |
 
 ### Move around
 
@@ -189,7 +192,7 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 |------|-------------|
 | `smoke_browser_open(url, persist?, session?, user_data_dir?, channel?, cdp?)` | Default = living Chromium. `persist=false` = test. `cdp=9222` = debug Chrome |
 | `smoke_browser_session` | `current` / `use` / `list` / `close` named sessions |
-| `smoke_browser_script(js_code)` | One round trip with loops |
+| `smoke_browser_script(js_code)` | One round trip with loops. Helper `assert({ expect, text, selector })` |
 | `smoke_browser_run(actions_json)` | JSON batch, no loops |
 | `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs |
 | `smoke_browser_scroll` / `reload` / `hover` / `press` | Page scroll (default down 200px) or `selector=@n` into view, then snapshot. Click already scrolls its target. Hover menus, then snapshot. |
@@ -246,7 +249,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.4.3**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.5.0**.
 
 ## License
 

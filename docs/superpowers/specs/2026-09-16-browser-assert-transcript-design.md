@@ -1,144 +1,89 @@
-# v1.5.0 — browser_assert + Auto-Transcript + Report dari Transcript
+# v1.5.0 — browser_assert
 
 **Date:** 2026-09-16
-**Status:** Draft untuk review
+**Status:** Agreed — assert only
 **Target version:** 1.5.0
 
 ## Ringkasan
 
-Menutup loop smoke test agar punya bukti lolos/gagal yang objektif, bukan interpretasi agen:
+Smoke test punya bukti lolos/gagal yang objektif. Snapshot tetap peta `@n`. Verdict dari `browser_assert`.
 
-1. **`browser_assert`** — tool MCP baru untuk verifikasi terprogram (harapan yang diverifikasi pass/fail).
-2. **Auto-transcript JSONL** — setiap aksi + hasil pada satu sesi direkam otomatis, tanpa perlu disalin manual.
-3. **`browser_report`** — berubah: tanpa `results_json` ia membaca transcript run terakhir sesi dan menghasilkan laporan + exit-code/status verdict.
+Tidak termasuk: auto-transcript JSONL, report dari transcript, `exit_code` CI, record-replay, scoped snapshot.
 
-Semua tool/aplikasi yang ada tetap bekerja; ini menambah lapisan, tidak menulis ulang.
+## Konteks (v1.4.3)
 
-## Konteks Kode Saat Ini (groudning)
-
-- Tool MCP di `mcp/server.py`: semua memakai pola `async with locked_session(session) as sess:` lalu `return dumps(result)`. `locked_session` dibuka di `tools/browser.py`, didecorate dari `tools/registry.py`.
-- Snapshots memberi `@ref` (`@1`, `@2`, …) via `parse_aria_snapshot`; ref disimpan di `self._refs` peta `sel`+`frame`. Resolusi selector lewat `self._locator(selector)` (mendukung `@n` dan CSS, termasuk `aria-ref=...`).
-- `click`/`type_text` menangkap error dan memetakan dengan `classify_target_error`/`classify_type_error` → `status:error` + `code` (`expired_ref`, `intercepted`) + hint.
-- `run_actions` (`_run_one`) berhenti di error pertama; `browser_script` lewat `_script_rpc` + helper di `mcp/script-host.mjs`.
-- `payload.py`: `dumps()` memampat JSON dan memotong >24k char; `SMOKE_VERSION = "1.4.3"`.
-- `reporter.py`: `generate_report(url, results)` → tabel markdown + summary + daftar Failures. `browser_report(results_json)` saat ini **wajib** `results_json` (disalin agen).
-- Tes: `tests/` unittest murni tanpa Playwright (registry factory di-inject). CI: `python -m unittest discover -s tests -v`.
-
-## Pendekatan yang Dipilih
-
-Alternatif yang dipertimbangkan:
-
-- **A (dipilih):** Tool assert + transcript + report dari transcript. Verdict objektif, minimal surface, semua aksi lama tetap jalan. Report jadi dari data nyata, bukan salinan agen.
-- **B:** Record → replay file `.smoke` deterministik. Lebih mencolok tapi effort jauh lebih besar (schema flow, rebase selector, langkah berulang) dan duplikatif dengan A.
-- **C:** Hanya scoped snapshot + `data-smoke-pin`. Cepat tapi tidak memberi verdict.
-
-A menutup gap utama (bukti lolos/gagal); B dan C masih bisa menjadi rilis terpisah berikutnya.
+- Loop skill: `open → snapshot → act → snapshot lagi`. Agen yang memutuskan lolos.
+- `browser_wait` menunggu load / visible / URL glob / `waitForFunction`. Timeout = `status:error`, bukan fail tes. Tidak ada text-contains, count, input_value, expected/actual.
+- `browser_report` tetap wajib `results_json` (tidak diubah).
+- Tool MCP di `mcp/server.py`; aksi batch di `_run_one`; script helper di `_script_rpc` + `mcp/script-host.mjs`.
+- Tes: unittest tanpa Playwright. `SMOKE_VERSION = "1.4.3"`.
 
 ## Desain
 
-### 1. `browser_assert` — tool verifikasi
-
-Signature:
+### `browser_assert`
 
 ```
 browser_assert(
     expect: str,            # text | url | visible | hidden | count | input_value
-    text: str = "",         # untuk text/url/input_value
-    selector: str = "",     # CSS atau @n; kosong = seluruh halaman (text) / input pertama (input_value)
-    count: int = 0,         # untuk expect="count" (jumlah eksak locator)
-    timeout: int = 5000,    # ms polling hingga kondisi terpenuhi
-    negate: bool = False,   # membalik hasil (seperti expect().not)
+    text: str = "",         # text / url (substring); input_value (eksak)
+    selector: str = "",     # CSS atau @n
+    count: int = 0,         # expect=count, jumlah eksak
+    timeout: int = 5000,    # ms, polling sampai kondisi terpenuhi
+    negate: bool = False,
     session: str = "",
 )
 ```
 
-Semantik per `expect`:
+| expect        | True jika |
+|---------------|-----------|
+| `text`        | innerText berisi `text` (selector kosong → `body`) |
+| `url`         | `page.url` mengandung `text` (substring, bukan glob `wait`) |
+| `visible`     | locator visible. Detached / tidak terlihat = fail |
+| `hidden`      | locator hidden **atau** detached (termasuk `@n` yang sudah hilang dari DOM) |
+| `count`       | jumlah locator (tanpa mereduksi ke `.first`) == `count` |
+| `input_value` | value == `text` (eksak). Selector kosong → `input, textarea, select` pertama |
 
-| expect       | True jika |
-|--------------|-----------|
-| `text`       | innerText elemen berisi `text` (selector kosong → body page) |
-| `url`        | `page.url` mengandung `text` |
-| `visible`    | lokator berstate visible (detach = fail) |
-| `hidden`     | lokator hidden **atau** detached |
-| `count`      | `locator.count()` == `count` (eksak) |
-| `input_value`| value input di `selector` (atau input pertama) == `text` |
+Error tool (`status:error`), bukan verdict:
 
-Perilaku:
-- `selector` kosong untuk `text` → pakai `locator("body")`; untuk `input_value` → `locator("input, textarea, select").first`.
-- Polling dengan batas `timeout`; `negate=True` membalik keputusan (mis. `expect="text" negate` = teks TIDAK boleh muncul).
-- Error tool (bukan verdict) bila: tidak ada page (`_need_page`), `expect` tidak dikenal, `selector` kosong padahal wajib (`visible`/`hidden`/`count`).
-- Hasil `status: "ok"` bila kondisi terpenuhi, `status: "assert_fail"` bila tidak — **bukan** `status:"error"`; ini verdict test. Wajib menyertakan `assert` (deskripsi), `expected`, `actual` ringkas.
+- tidak ada page (`_need_page`)
+- `expect` tidak dikenal
+- `selector` kosong untuk `visible` / `hidden` / `count`
+- `text` kosong untuk `text` / `url`
+- `@n` yang tidak pernah ada di snapshot (`Unknown ref`)
 
-Contoh hasil:
+Verdict:
 
-```json
-{"status":"ok","assert":"text @3 contains 'Berhasil disimpan'","expected":"text contains 'Berhasil disimpan'","actual":"found in @3"}
-{"status":"assert_fail","assert":"url contains /checkout","expected":"url contains /checkout","actual":"https://a.com/cart","hint":"Snapshot or screenshot to debug."}
-```
+- kondisi terpenuhi → `status:ok`
+- tidak terpenuhi / timeout → `status:assert_fail` (bukan `error`)
+- wajib: `assert`, `expected`, `actual` ringkas; fail menambah `hint`
 
-Modul: logika hasil dibangun di `mcp/tools/assertion.py` (murni, tanpa Playwright) agar diuji unit; bagian DOM/Polling di `BrowserSession.assert_condition()` di `mcp/tools/browser.py` memakai `_locator`, `_need_page`, dan `page.wait_for_function`/`locator.wait_for`.
+`negate=true` membalik keputusan dan polling menunggu kondisi terbalik (`expect=visible` + negate = menunggu tidak terlihat). `negate="false"` (string) harus False.
 
-### 2. Auto-transcript JSONL
+`input_value` boleh `text=""`. `count=0` valid.
 
-- File: `artifacts/transcripts/<safe_session>.jsonl` (satu baris JSON per aksi), rotasi ke `.1`, `.2`, … bila > 2000 baris.
-- Direkam **setiap pemanggilan tool MCP** (termasuk `browser_script`, `browser_run`) oleh decorator `_trace(action)` di `server.py` (di bawah `@mcp.tool()` sehingga tiap call masuk track).
-- Bidang per baris: `seq`, `ts` (ISO), `run_id`, `session`, `action` (nama tool), `params` (ringkas), `status` (diekskstrak dari JSON hasil), `elapsed_ms`, `screenshot_path` bila ada, `results` (daftar ringkas hasil bersarang, dipotong).
-- **Kebijakan redaksi:** nilai `screenshot_base64` dihapus; `js_code`/`actions_json` disimpan terpotong (400 char); text param dibatasi 120 char; isi body hasil tidak disimpan kecuali `status`/kunci ringkas.
-- **Run boundary:** `run_id` baru dimulai pada `browser_open` (atau `ensure_started`) untuk sesi itu; `browser_report` membaca semua baris sesi tsb sejak run terakhir. Tanpa `open` sebelumnya (attach hanya) → run dimulai dari entri pertama.
-- Sesi dengan nama (mis. `test`) → file sendiri; sesi `default` → `artifacts/transcripts/default.jsonl`.
+Jangan pakai `_locator()` yang melempar `Expired ref` untuk hidden/visible — detached adalah verdict, kecuali ref tidak pernah di-snapshot.
 
-### 3. `browser_report` — dari transcript
+### Integrasi
 
-Perubahan signature: `results_json: str = ""` (opsional).
+- `_run_one` aksi `assert`. Batch berhenti pada `error` **atau** `assert_fail`. Status batch = status langkah yang gagal (`assert_fail` tetap `assert_fail`).
+- `script_rpc` + helper `assert({ expect, text, selector, count, timeout, negate })`. Gagal → `run_script` mengembalikan payload assert itu dan menghentikan snippet (jangan lanjut helper berikutnya).
+- Tidak mengubah `browser_report`.
 
-- Bila `results_json` diisi → perilaku lama (kompatibel ke belakang).
-- Bila kosong → ambil transcript run terakhir sesi → peta tiap baris ke hasil `reporter.generate_report`:
-  - `status ok` → pass; `assert_fail`/`error` → fail.
-  - Kolom screenshot terisi bila baris punya `screenshot_path`.
-- Output: menambah `verdict: "passed"|"failed"`, `passed`, `failed`, `total`, dan `exit_code` (0 bila semua pass, 1 bila ada fail) agar bisa dipakai CI.
-- Tanpa baris transcript → `status:"error"` dengan hint "no recorded actions; run browser_open then actions, or pass results_json".
+### Modul
 
-### 4. Integrasi `run_actions` + `browser_script`
+- `mcp/tools/assertion.py` — validasi, deskripsi, verdict, `as_bool`, `batch_halt` (murni).
+- `BrowserSession.assert_condition()` — DOM/polling, locator mentah untuk `count`, `_need_page`.
 
-- `_run_one` menerima aksi `assert` → `self.assert_condition(...)`; `assert_fail` dicatat sebagai fail (bukan henti error? → **henti**, konsisten dgn "stops on first error", tapi statusnya `assert_fail`).
-- `script_rpc` + `coerce_rpc_params` + helper `script-host.mjs` menambah helper `assert(...)` dengan parameter yang sama.
+## Docs
 
-### 5. Versi, skill, dokumentasi
-
-- `SMOKE_VERSION` → `1.5.0` (`payload.py`) + `package.json` version.
-- `skills/browser-smoke/SKILL.md`: tambah langkah assert pada loop smoke test dan seksi "Verification": `open → snapshot → act → assert → (report)`, catat bahwa verdict dari `browser_assert`, screenshot hanya bila diminta.
-- `README.md`: dokumentasi `browser_assert` + report otomatis.
-- `CHANGELOG.md`: entri 1.5.0.
-
-## Tidak Termasuk (scope out)
-
-- Record → replay `.smoke` (opsi B) — rilis terpisah.
-- Scoped snapshot / `data-smoke-pin` (opsi C) — rilis terpisah.
-- Visual pointer & pergerakan kursor native.
-- Otomasi level OS.
-- Perubahan pada mode session/Chrome lifecyle.
-
-## Error Handling
-
-- `expect` tidak dikenal → `{"status":"error","message":"unknown expect: X","hint":"use text|url|visible|hidden|count|input_value"}`.
-- Tidak ada page → reuse `_need_page` (status error, hint open dulu).
-- Timeout polling → `assert_fail` dengan `actual` = gambaran saat timeout (mis. "not visible after 5000ms").
-- `assert` pada `run_actions`/`script` gagal → berhenti, status `assert_fail`, transcript mencatat fail.
-- Transcript gagal tulis (disk penuh/permission) → jangan rusak tool: catat ke `stderr`, lanjutkan tool normal, tandai `"transcript":"error"` di output tool.
+- `SMOKE_VERSION` + `package.json` → `1.5.0`
+- Skill: `open → snapshot → act → assert`. Snapshot = peta. Assert = verdict.
+- README: dokumentasi tool. Report tetap `results_json`.
+- CHANGELOG 1.5.0. Tidak menjanjikan transcript.
 
 ## Testing
 
-- `tests/test_assertion.py` (murni): shaping hasil untuk tiap expect, `negate`, timeout, unknown-expect, status error.
-- `tests/test_transcript.py`: append+rotasi, run boundary via open, redaksi (hapus base64; truncate params), mapping baris→results untuk report, verdict/exit_code.
-- `tests/test_reporter.py` (jika belum): kompatibilitas `results_json` lama masih jalan.
-- Tidak menambah dependency; tetap unittest + CI yang sama.
-
-## Checklist Rilis
-
-- [ ] `mcp/tools/assertion.py` (shaping murni) + unit test
-- [ ] `BrowserSession.assert_condition` + `@mcp.tool browser_assert` + test manual via MCP
-- [ ] `mcp/tools/transcript.py` (recorder + run boundary) + `_trace` di server.py + rotasi
-- [ ] `browser_report` via transcript + verdict/exit_code + unit test
-- [ ] `_run_one` aksi `assert` + `script_rpc` + `script-host.mjs` helper
-- [ ] bump versi + skill + README + CHANGELOG
-- [ ] `python -m unittest discover -s tests -v` hijau
+- `tests/test_assertion.py`: shaping, negate, unknown expect, selector wajib, text wajib, `as_bool("false")`, `batch_halt`.
+- `tests/test_sessions.py`: coerce RPC dict `assert`.
+- `SMOKE_VERSION == "1.5.0"`.
+- Tidak menambah dependency.

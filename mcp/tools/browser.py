@@ -11,6 +11,16 @@ from typing import Any, Optional
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
+from tools.assertion import (
+    as_bool,
+    batch_halt,
+    clip_actual,
+    describe,
+    evaluate,
+    normalize_expect,
+    validate_assert,
+    verdict,
+)
 from tools.image_diff import compare_png
 from tools.payload import (
     SNAPSHOT_SELECTOR,
@@ -346,18 +356,18 @@ class BrowserSession:
             return mapped
         return selector
 
-    async def _locator(self, selector: str, *, hidden_ok: bool = False):
-        is_ref = selector.startswith("@") and selector[1:].isdigit()
+    def _resolve_locator(self, selector: str):
         target = self._target(selector)
         if isinstance(target, str):
-            loc = self.page.locator(target)
-        else:
-            frame = target.get("frame") or ""
-            loc = (
-                self.page.frame_locator(frame).locator(target["sel"])
-                if frame
-                else self.page.locator(target["sel"])
-            )
+            return self.page.locator(target)
+        frame = target.get("frame") or ""
+        if frame:
+            return self.page.frame_locator(frame).locator(target["sel"])
+        return self.page.locator(target["sel"])
+
+    async def _locator(self, selector: str, *, hidden_ok: bool = False):
+        is_ref = selector.startswith("@") and selector[1:].isdigit()
+        loc = self._resolve_locator(selector)
         count = await loc.count()
         if is_ref and count == 0:
             raise ValueError(f"Expired ref {selector}. Call browser_snapshot again.")
@@ -947,6 +957,126 @@ class BrowserSession:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    async def assert_condition(
+        self,
+        expect: str,
+        text: str = "",
+        selector: str = "",
+        count: int = 0,
+        timeout: int = 5000,
+        negate: bool = False,
+    ) -> dict:
+        err = self._need_page()
+        if err:
+            return err
+        negate = as_bool(negate)
+        try:
+            count_i = int(count or 0)
+            timeout_ms = int(timeout if timeout is not None else 5000)
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "count and timeout must be integers"}
+        timeout_ms = max(0, timeout_ms)
+        bad = validate_assert(expect=expect, selector=selector, text=text)
+        if bad:
+            return bad
+        kind = normalize_expect(expect)
+        line, expected = describe(
+            expect=kind, selector=selector, text=text, count=count_i, negate=negate
+        )
+        try:
+            passed, actual = await self._assert_poll(
+                kind, text, selector, count_i, timeout_ms, negate
+            )
+        except ValueError as e:
+            return classify_target_error(str(e))
+        except Exception as e:
+            classified = classify_target_error(str(e))
+            if classified.get("code"):
+                return classified
+            passed, actual = False, clip_actual(str(e))
+        return verdict(assert_line=line, expected=expected, actual=actual, passed=passed)
+
+    async def _assert_poll(
+        self,
+        kind: str,
+        text: str,
+        selector: str,
+        count: int,
+        timeout_ms: int,
+        negate: bool,
+    ) -> tuple[bool, str]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_ms / 1000
+        last_actual = ""
+        while True:
+            ok, actual = await self._assert_once(kind, text, selector, count, negate)
+            if ok:
+                return True, actual
+            last_actual = actual
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                if timeout_ms > 0:
+                    return False, f"{last_actual} after {timeout_ms}ms"
+                return False, last_actual
+            await asyncio.sleep(min(0.1, remaining))
+
+    async def _assert_once(
+        self, kind: str, text: str, selector: str, count: int, negate: bool
+    ) -> tuple[bool, str]:
+        if kind == "url":
+            observed = self.page.url
+            ok = evaluate("url", observed=observed, expected_text=text, negate=negate)
+            return ok, observed
+        if kind == "count":
+            loc = self._resolve_locator(selector)
+            n = await loc.count()
+            ok = evaluate("count", observed=n, expected_count=count, negate=negate)
+            return ok, str(n)
+        if kind == "text":
+            loc = self._resolve_locator((selector or "").strip() or "body")
+            n = await loc.count()
+            observed = ""
+            if n > 0:
+                try:
+                    observed = await loc.first.inner_text(timeout=1000)
+                except Exception:
+                    observed = ""
+            ok = evaluate("text", observed=observed, expected_text=text, negate=negate)
+            where = (selector or "").strip() or "body"
+            if ok:
+                return True, f"not found in {where}" if negate else f"found in {where}"
+            return False, clip_actual(observed) or "not found"
+        if kind == "input_value":
+            loc = self._resolve_locator((selector or "").strip() or "input, textarea, select")
+            n = await loc.count()
+            if n == 0:
+                ok = evaluate("input_value", observed="", expected_text=text, negate=negate)
+                return ok, "no input"
+            try:
+                observed = await loc.first.input_value(timeout=1000)
+            except Exception as e:
+                return False, clip_actual(str(e))
+            ok = evaluate("input_value", observed=observed, expected_text=text, negate=negate)
+            return ok, clip_actual(observed) if observed else '""'
+        if kind in ("visible", "hidden"):
+            loc = self._resolve_locator(selector)
+            n = await loc.count()
+            is_vis = False
+            if n > 0:
+                try:
+                    is_vis = await loc.first.is_visible()
+                except Exception:
+                    is_vis = False
+            if kind == "visible":
+                observed = is_vis
+                actual = "visible" if is_vis else ("detached" if n == 0 else "hidden")
+            else:
+                observed = n == 0 or not is_vis
+                actual = "detached" if n == 0 else ("hidden" if not is_vis else "visible")
+            ok = evaluate(kind, observed=observed, negate=negate)
+            return ok, actual
+        return False, f"unknown expect: {kind}"
+
     async def execute(self, js_code: str) -> dict:
         err = self._need_page()
         if err:
@@ -1270,8 +1400,8 @@ class BrowserSession:
             except Exception as e:
                 result = {"status": "error", "message": str(e)}
             results.append({"action": action, **result})
-            if result.get("status") == "error":
-                return {"status": "error", "failed_at": action, "results": results}
+            if batch_halt(result.get("status") or ""):
+                return {"status": result.get("status"), "failed_at": action, "results": results}
         out = {"status": "ok", "results": results}
         out.update(await self._shot_fields(screenshot, False))
         return out
@@ -1307,6 +1437,15 @@ class BrowserSession:
                 url=raw.get("url", ""),
                 js=raw.get("js") or raw.get("js_code") or "",
                 timeout=int(raw.get("timeout", 10000)),
+            )
+        if action == "assert":
+            return await self.assert_condition(
+                expect=str(raw.get("expect") or ""),
+                text=str(raw.get("text") or ""),
+                selector=str(raw.get("selector") or ""),
+                count=raw.get("count", 0),
+                timeout=raw.get("timeout", 5000),
+                negate=raw.get("negate", False),
             )
         if action in ("switch_tab", "tab"):
             return await self.switch_tab(int(raw["index"]))
@@ -1375,6 +1514,15 @@ class BrowserSession:
                 url=params.get("url", ""),
                 js=params.get("js") or params.get("js_code") or "",
                 timeout=int(params.get("timeout", 10000)),
+            )
+        if method == "assert":
+            return await self.assert_condition(
+                expect=str(params.get("expect") or ""),
+                text=str(params.get("text") or ""),
+                selector=str(params.get("selector") or ""),
+                count=params.get("count", 0),
+                timeout=params.get("timeout", 5000),
+                negate=params.get("negate", False),
             )
         if method == "execute":
             return await self.execute(params.get("js_code") or params.get("js") or "")
@@ -1456,8 +1604,14 @@ class BrowserSession:
                 if kind == "log":
                     logs.append(msg.get("text") or "")
                 elif kind == "rpc":
+                    method = msg.get("method") or ""
                     try:
-                        result = await self._script_rpc(msg.get("method") or "", msg.get("params"))
+                        result = await self._script_rpc(method, msg.get("params"))
+                        if method == "assert" and batch_halt(result.get("status") or ""):
+                            out = dict(result)
+                            if logs:
+                                out["logs"] = logs[-20:]
+                            return out
                         proc.stdin.write(
                             (
                                 json.dumps(

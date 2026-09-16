@@ -88,6 +88,7 @@ const page = {
     return rpc("select", { selector, ...asOpts(opts) });
   },
   switchTab: (index) => rpc("switch_tab", { index }),
+  assert: (opts) => rpc("assert", asOpts(opts)),
 };
 
 const open = (url, opts) => page.goto(url, opts);
@@ -104,6 +105,7 @@ const download = (selector, saveAs) => page.download(selector, saveAs);
 const upload = (selector, paths) => page.upload(selector, paths);
 const select = (selector, opts) => page.select(selector, opts);
 const switchTab = (index) => page.switchTab(index);
+const assert = (opts) => page.assert(opts);
 
 const rl = readline.createInterface({ input: process.stdin });
 
@@ -144,6 +146,7 @@ rl.on("line", async (line) => {
       "upload",
       "select",
       "switchTab",
+      "assert",
       msg.code,
     );
     const result = await fn(
@@ -163,6 +166,7 @@ rl.on("line", async (line) => {
       upload,
       select,
       switchTab,
+      assert,
     );
     send({ type: "done", result, logs });
   } catch (err) {

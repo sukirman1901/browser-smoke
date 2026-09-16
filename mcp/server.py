@@ -258,6 +258,30 @@ async def browser_wait(
 
 
 @mcp.tool()
+async def browser_assert(
+    expect: str,
+    text: str = "",
+    selector: str = "",
+    count: int = 0,
+    timeout: int = 5000,
+    negate: bool = False,
+    session: str = "",
+) -> str:
+    """Verdict: text|url|visible|hidden|count|input_value. Returns ok or assert_fail (not error). Snapshot picks @n; this is pass/fail. timeout is milliseconds."""
+    async with locked_session(session) as sess:
+        return dumps(
+            await sess.assert_condition(
+                expect=expect,
+                text=text,
+                selector=selector,
+                count=count,
+                timeout=timeout,
+                negate=negate,
+            )
+        )
+
+
+@mcp.tool()
 async def browser_run(actions_json: str, screenshot: bool = False, session: str = "") -> str:
     """Run many actions in one call. JSON array of {action, ...}. Stops on first error."""
     async with locked_session(session) as sess:
