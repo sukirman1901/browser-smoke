@@ -1,6 +1,7 @@
 .browser-smoke/
 .venv/
 artifacts/
+docs/superpowers/
 __pycache__/
 *.pyc
 node_modules/
