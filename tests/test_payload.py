@@ -164,7 +164,7 @@ class PayloadTests(unittest.TestCase):
 
     def test_version_constant(self):
         from tools.payload import SMOKE_VERSION
-        self.assertEqual(SMOKE_VERSION, "1.5.1")
+        self.assertEqual(SMOKE_VERSION, "1.6.0")
 
     def test_parse_aria_keeps_interactive_refs(self):
         from tools.payload import parse_aria_snapshot

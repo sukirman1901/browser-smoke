@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-09-17
+
+Several tabs can load and scrape at the same time.
+
+### Added
+
+- `browser_parallel` opens up to 8 URLs as tabs together, or runs the same JS on tabs that are already open
+- Matching `parallel` action in `browser_run`
+
+### Notes
+
+MCP still queues tool calls. `open_tab` then `open_tab` is still one-by-one. Overlap happens inside one `browser_parallel`. Click/type stay on the focused tab.
+
 ## [1.5.1] - 2026-09-16
 
 Assert polling honors the timeout you passed.

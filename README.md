@@ -53,7 +53,8 @@ Same loop for a daily task and a smoke test (OpenCode names):
 4. Prove the result with `smoke_browser_assert` (text/url/visible/…). Snapshot is not the verdict.
 5. Several steps: **one** `smoke_browser_script` (or one `smoke_browser_run`). Do not chain eight MCP execute calls.
 6. Scrape with `smoke_browser_execute` returning a small JSON array — not `innerHTML`.
-7. Screenshot only for a visual bug. Never `screenshot_base64`.
+7. Several URLs or tabs at once: **one** `smoke_browser_parallel`. Do not chain `open_tab`.
+8. Screenshot only for a visual bug. Never `screenshot_base64`.
 
 ## Daily task (window stays up)
 
@@ -102,6 +103,14 @@ Writes a baseline/diff under `artifacts/`. No PNG in the tool result unless you 
 smoke_browser_open url=https://example.com
 smoke_browser_execute js_code="() => [...document.querySelectorAll('a')].slice(0,50).map(a => ({t:a.textContent.trim(), h:a.href}))"
 ```
+
+Several sites together (max 8). Do not `open_tab` in a loop — those wait on each other:
+
+```
+smoke_browser_parallel urls='["https://example.com","https://example.org"]' js_code="() => ({title: document.title, href: location.href})"
+```
+
+Same JS on tabs already open: `js_code` only. Click/type still use the focused tab (`switch_tab`).
 
 `smoke_browser_close` is optional; it does not quit the living window.
 
@@ -194,7 +203,8 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | `smoke_browser_session` | `current` / `use` / `list` / `close` named sessions |
 | `smoke_browser_script(js_code)` | One round trip with loops. Helper `assert({ expect, text, selector })` |
 | `smoke_browser_run(actions_json)` | JSON batch, no loops |
-| `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs |
+| `smoke_browser_parallel(urls?, js_code?, jobs_json?, tabs?)` | Open/scrape up to 8 tabs at once. MCP tools still queue; this is the overlap |
+| `smoke_browser_open_tab` / `get_tabs` / `switch_tab` | Extra tabs, one at a time. Prefer `parallel` for several URLs |
 | `smoke_browser_scroll` / `reload` / `hover` / `press` | Page scroll (default down 200px) or `selector=@n` into view, then snapshot. Click already scrolls its target. Hover menus, then snapshot. |
 | `smoke_browser_close(shutdown?)` | Default leaves the living window. `shutdown=true` kills persist Chromium |
 
@@ -236,6 +246,7 @@ OpenCode names below. Cursor / Claude Code: drop the `smoke_` prefix.
 | Connection refused | The target app is not running |
 | Python not found | Install Python 3.10+ |
 | Two sessions keep hitting the same tab | Pass `session=` on every tool |
+| Tabs still open one-by-one | One `browser_parallel` with `urls`. `open_tab` is sequential |
 | `npx smoke` does the wrong thing | That package is not this project. Use `npx github:sukirman1901/browser-smoke` |
 
 ## Development
@@ -249,7 +260,7 @@ npm link
 
 After `npm link`, the CLI is `smoke` (alias `browser-smoke`).
 
-Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.5.1**.
+Releases: [CHANGELOG.md](CHANGELOG.md). Latest is **v1.6.0**.
 
 ## License
 

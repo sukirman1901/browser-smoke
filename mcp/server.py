@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 from tools.browser import get_session, locked_session, registry
 from tools.dom_extractor import classify_inputs, guess_input_value
 from tools.payload import clip_logs, compact_classified, compact_network, dumps
+from tools.parallel import parse_parallel_jobs
 from tools.reporter import generate_report
 
 mcp = FastMCP("smoke")
@@ -346,6 +347,28 @@ async def browser_offscreen(action: str, url: str = "", js: str = "", session: s
     """Hidden page for background work. action: open|exec|close."""
     async with locked_session(session) as sess:
         return dumps(await sess.offscreen(action, url, js))
+
+
+@mcp.tool()
+async def browser_parallel(
+    urls: str = "",
+    js_code: str = "",
+    jobs_json: str = "",
+    tabs: str = "",
+    session: str = "",
+) -> str:
+    """Load several URLs as tabs at once, or run the same JS on existing tabs. This is how work overlaps — MCP tools still queue. Max 8. Load + evaluate only; click/type still use the focused tab."""
+    async with locked_session(session) as sess:
+        parsed = parse_parallel_jobs(
+            urls=urls,
+            js_code=js_code,
+            jobs_json=jobs_json,
+            tabs=tabs,
+            existing_tabs=sess._live_tab_indexes(),
+        )
+        if parsed.get("status") == "error":
+            return dumps(parsed)
+        return dumps(await sess.run_parallel(parsed["jobs"]))
 
 
 @mcp.tool()

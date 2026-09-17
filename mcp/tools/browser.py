@@ -22,6 +22,7 @@ from tools.assertion import (
     verdict,
 )
 from tools.image_diff import compare_png
+from tools.parallel import parse_parallel_jobs, settle_parallel
 from tools.payload import (
     SNAPSHOT_SELECTOR,
     SMOKE_VERSION,
@@ -1091,19 +1092,7 @@ class BrowserSession:
         err = self._need_page()
         if err:
             return err
-        try:
-            result = await self.page.evaluate(js_code)
-            return {"status": "ok", "result": result}
-        except Exception as e:
-            msg = str(e)
-            low = msg.lower()
-            hint = ""
-            if "serializ" in low:
-                hint = "Return a JSON object, array, or string — not a DOM node or function."
-            err = {"status": "error", "message": msg}
-            if hint:
-                err["hint"] = hint
-            return err
+        return await self._eval_page(self.page, js_code)
 
     async def inject_script(self, script: str, url_pattern: str = "*"):
         err = self._need_context()
@@ -1174,6 +1163,132 @@ class BrowserSession:
             return {"status": "error", "message": f"tab {index} is closed"}
         await self._adopt_page(page)
         return {"status": "ok", "index": index, "url": page.url, "title": await page.title()}
+
+    def _live_tab_indexes(self) -> list[int]:
+        indexes = []
+        for i, page in enumerate(self._pages):
+            if page is self._offscreen_page:
+                continue
+            try:
+                if page.is_closed():
+                    continue
+            except Exception:
+                continue
+            indexes.append(i)
+        return indexes
+
+    def _page_index(self, page: Page) -> int | None:
+        try:
+            return self._pages.index(page)
+        except ValueError:
+            return None
+
+    async def _eval_page(self, page: Page, js_code: str) -> dict:
+        try:
+            result = await page.evaluate(js_code)
+            return {"status": "ok", "result": result}
+        except Exception as e:
+            msg = str(e)
+            err = {"status": "error", "message": msg}
+            if "serializ" in msg.lower():
+                err["hint"] = "Return a JSON object, array, or string — not a DOM node or function."
+            return err
+
+    async def _parallel_one(self, job: dict) -> dict:
+        url = str(job.get("url") or "").strip()
+        js = str(job.get("js") or "")
+        tab = job.get("tab")
+        page: Optional[Page] = None
+        try:
+            if url:
+                page = await self.context.new_page()
+                self._on_new_page(page)
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                status_code = response.status if response else None
+            else:
+                idx = int(tab)
+                if idx < 0 or idx >= len(self._pages):
+                    return {
+                        "status": "error",
+                        "tab": idx,
+                        "message": f"tab {idx} out of range (0-{max(len(self._pages) - 1, 0)})",
+                    }
+                page = self._pages[idx]
+                if page.is_closed():
+                    return {"status": "error", "tab": idx, "message": f"tab {idx} is closed"}
+                status_code = None
+            title = await page.title()
+            out: dict[str, Any] = {
+                "status": "ok",
+                "url": page.url,
+                "title": title,
+            }
+            index = self._page_index(page)
+            if index is not None:
+                out["index"] = index
+            if status_code is not None:
+                out["status_code"] = status_code
+            if js:
+                evaluated = await self._eval_page(page, js)
+                if evaluated.get("status") == "ok":
+                    out["result"] = evaluated.get("result")
+                else:
+                    evaluated.pop("status", None)
+                    out["status"] = "error"
+                    out.update(evaluated)
+            return out
+        except Exception as e:
+            err = {"status": "error", "message": str(e)}
+            if url:
+                err["url"] = url
+            elif tab is not None:
+                err["tab"] = tab
+            return err
+
+    async def run_parallel(self, jobs: list[dict]) -> dict:
+        needs_url = any(str(job.get("url") or "").strip() for job in jobs)
+        if self.context is None:
+            if not needs_url:
+                return {
+                    "status": "error",
+                    "code": "no_session",
+                    "message": "No browser session. Call browser_open first.",
+                }
+            try:
+                await self.ensure_started()
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
+        err = self._need_context()
+        if err:
+            return err
+        focused = self.page
+        gathered = await asyncio.gather(
+            *[self._parallel_one(job) for job in jobs],
+            return_exceptions=True,
+        )
+        results: list[dict] = []
+        for item in gathered:
+            if isinstance(item, Exception):
+                results.append({"status": "error", "message": str(item)})
+            else:
+                results.append(item)
+        if focused is not None:
+            try:
+                if not focused.is_closed():
+                    self.page = focused
+            except Exception:
+                pass
+        elif self.page is None:
+            for page in self._pages:
+                if page is self._offscreen_page:
+                    continue
+                try:
+                    if not page.is_closed():
+                        self.page = page
+                        break
+                except Exception:
+                    continue
+        return settle_parallel(results)
 
     def get_console(self) -> list[dict]:
         return list(self._console_logs)
@@ -1459,6 +1574,26 @@ class BrowserSession:
             )
         if action in ("switch_tab", "tab"):
             return await self.switch_tab(int(raw["index"]))
+        if action == "parallel":
+            urls = raw.get("urls") or ""
+            tabs = raw.get("tabs") or ""
+            jobs = raw.get("jobs_json") or raw.get("jobs") or ""
+            if isinstance(urls, list):
+                urls = json.dumps(urls)
+            if isinstance(tabs, list):
+                tabs = json.dumps(tabs)
+            if isinstance(jobs, (list, dict)):
+                jobs = json.dumps(jobs)
+            parsed = parse_parallel_jobs(
+                urls=urls,
+                js_code=raw.get("js") or raw.get("js_code") or "",
+                jobs_json=jobs,
+                tabs=tabs,
+                existing_tabs=self._live_tab_indexes(),
+            )
+            if parsed.get("status") == "error":
+                return parsed
+            return await self.run_parallel(parsed["jobs"])
         if action == "execute":
             return await self.execute(raw.get("js") or raw.get("js_code") or "")
         if action == "snapshot":

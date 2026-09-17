@@ -12,8 +12,9 @@ Do **not** return images unless the user asks for a visual check.
 3. After navigation, a new page, `code=expired_ref`, or if you are unsure which control to use: **snapshot again**.
 4. To prove submit/publish/login/save worked: **`browser_assert`**. Snapshot is the `@n` map, not the verdict. `status: assert_fail` means the app failed; `status: error` means the tool could not check.
 5. Several steps → one `browser_script` (call `snapshot()` inside after nav) or one `browser_run`. Do not chain eight execute/DOM probes.
-6. Never `screenshot_base64`. Screenshot only for a visual bug.
-7. Scrape: `browser_execute` returning a **small JSON array**. No `innerHTML`. No DOM nodes.
+6. Several URLs or tabs at once → one `browser_parallel`. Do not chain `open_tab`.
+7. Never `screenshot_base64`. Screenshot only for a visual bug.
+8. Scrape: `browser_execute` returning a **small JSON array**. No `innerHTML`. No DOM nodes.
 
 Do not treat a second snapshot as pass/fail. `wait` is “block until ready”; `assert` is “this must be true now”.
 
@@ -70,6 +71,7 @@ Named sessions: `session=` on **every** tool. `channel=chrome` is throwaway stoc
 | `browser_assert` | **Verdict.** `expect=text\|url\|visible\|hidden\|count\|input_value`. `ok` or `assert_fail`. `wait` is not this. |
 | `browser_script` | Default for 2+ steps. `snapshot()` / `click('@n')` / `type` / `wait` / `assert` / `scroll` / `hover` / `execute` inside. |
 | `browser_run` | JSON batch, no loops. |
+| `browser_parallel` | Several URLs/tabs at once (max 8). Load + JS. Not parallel click. |
 | `browser_click` / `type` / `paste` / `drag` / `hover` / `press` | `@n` from the last snapshot. Click does not silent-force. |
 | `browser_scroll` | Page delta, or `selector=@n` into view. Then snapshot. |
 | `browser_select_option` / `browser_set_files` / `browser_download` | `download url=` fetches a file. `set_files` fills hidden file inputs. Type cannot fill `<select>`. |
@@ -93,4 +95,10 @@ If type/paste fail on an editor: **one** `execute` to set the value, then snapsh
 ```
 browser_open url="https://example.com"
 browser_execute js_code="() => [...document.querySelectorAll('a')].slice(0,50).map(a => ({t:a.textContent.trim(), h:a.href}))"
+```
+
+Several sites:
+
+```
+browser_parallel urls='["https://example.com","https://example.org"]' js_code="() => ({title: document.title, href: location.href})"
 ```
